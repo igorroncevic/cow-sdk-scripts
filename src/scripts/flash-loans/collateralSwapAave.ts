@@ -11,7 +11,7 @@ import { ethers } from "ethers";
 import { confirm, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { latest } from "@cowprotocol/app-data";
-import { orderHelperFactoryAbi } from "./OrderHelperFactoryAbi";
+import { orderHelperFactoryAbi } from "./abi/orderHelperFactoryAbi";
 
 // * Collateral - aETHWeth: https://sepolia.etherscan.io/token/0x5b071b590a59395fe4025a0ccc1fcc931aac1830
 // * Underlying - WETH: https://sepolia.etherscan.io/address/0xc558dbdd856501fcd9aaf1e62eae57a9f0629a3c#code
@@ -127,7 +127,7 @@ export async function run() {
     token: TOKENS.oldUnderlying,
     amount: oldUnderlingBalance,
     // TODO: how would we tell the hint we want to send the tokens to the helper?
-    loanReceiver: helperContract // TODO: not implemented in backend
+    loanReceiver: helperContract, // TODO: not implemented in backend
   };
   console.log("flashLoanHint", flashLoanHint);
 
