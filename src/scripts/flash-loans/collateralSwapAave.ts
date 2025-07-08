@@ -15,10 +15,17 @@ import { getErc20Contract } from "../../contracts/erc20";
 import { latest } from "@cowprotocol/app-data";
 import { orderHelperFactoryAbi } from "./abi/OrderHelperFactoryAbi";
 
-// * Collateral - aETHWeth: https://sepolia.etherscan.io/token/0x5b071b590a59395fe4025a0ccc1fcc931aac1830
-// * Underlying - WETH: https://sepolia.etherscan.io/address/0xc558dbdd856501fcd9aaf1e62eae57a9f0629a3c#code
-// * Supply 10 aETHWeth: https://sepolia.etherscan.io/tx/0x7cf4f7853963292ff7819d4a5cd5e31c55e7f679e49237c93315b47029486698
-// * Borrowed 1000 GHO: https://sepolia.etherscan.io/tx/0xb470bbf7e98d1b4cad7fa79e97b64e295bb2e077f0e91f9220d39c48f339641c
+// To setup an account to test this script:
+// 1. Create a test account (PK to use in the script)
+// 2. Go to https://app.aave.com, enable sepolia (in the gear icon on the top right), and supply sepolia ETH
+//    Example: https://sepolia.etherscan.io/tx/0x7cf4f7853963292ff7819d4a5cd5e31c55e7f679e49237c93315b47029486698
+// 3. Borrow some GHO
+//    Example: https://sepolia.etherscan.io/tx/0xb470bbf7e98d1b4cad7fa79e97b64e295bb2e077f0e91f9220d39c48f339641c
+// 4. Add the private key and the RPC URL to the `.env` file:
+// ```ini
+// RPC_URL_11155111=your-rpc
+// PRIVATE_KEY=your-pk
+// ```
 
 const TOKENS = {
   oldUnderlying: "0xc558dbdd856501fcd9aaf1e62eae57a9f0629a3c", // WETH
