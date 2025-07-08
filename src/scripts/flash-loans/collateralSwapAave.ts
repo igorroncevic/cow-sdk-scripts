@@ -79,6 +79,8 @@ export async function run() {
     });
 
   // Post the 1271 order (including the flash-loan hint and the pre-hook)
+  // TODO: I believe the SDK doesn't handle very well 1271 orders, we might need to use another specific method to pass also the signature either in the quote, or at the time of posting the order.
+  // TODO: The signature should contain the order, so it can be decoded: `GPv2Order.Data memory _order = abi.decode(_signature, (GPv2Order.Data));`
   const { quoteResults, postSwapOrderFromQuote } = await sdk.getQuote(
     parameters,
     advancedSettings
