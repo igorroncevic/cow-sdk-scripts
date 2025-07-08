@@ -1,17 +1,19 @@
 import { sepolia, APP_CODE } from "../../const";
-const { WETH_ADDRESS, COW_ADDRESS } = sepolia;
+
 import {
   SupportedChainId,
   OrderKind,
   TradeParameters,
   TradingSdk,
   SigningScheme,
+  WithPartialTraderParams,
+  SwapAdvancedSettings,
 } from "@cowprotocol/cow-sdk";
 import { ethers } from "ethers";
 import { confirm, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { latest } from "@cowprotocol/app-data";
-import { orderHelperFactoryAbi } from "./abi/orderHelperFactoryAbi";
+import { orderHelperFactoryAbi } from "./abi/OrderHelperFactoryAbi";
 
 // * Collateral - aETHWeth: https://sepolia.etherscan.io/token/0x5b071b590a59395fe4025a0ccc1fcc931aac1830
 // * Underlying - WETH: https://sepolia.etherscan.io/address/0xc558dbdd856501fcd9aaf1e62eae57a9f0629a3c#code
@@ -44,6 +46,113 @@ export async function run() {
     appCode: APP_CODE,
   });
 
+  // Get some info about the assets
+  const {
+    oldUnderlingBalance,
+    oldUnderlyingSymbol,
+    oldUnderlyingDecimals,
+    oldUnderlyingBalanceFormatted,
+    newUnderlyingSymbol,
+    newUnderlyingDecimals,
+  } = await getAssetsInfo({ wallet, trader });
+
+  // Define trade parameters
+  console.log(
+    `Get quote for selling ${oldUnderlyingBalanceFormatted} ${oldUnderlyingSymbol} for ${newUnderlyingSymbol}`
+  );
+
+  // Get the order details
+  const { parameters, advancedSettings, helperContract } =
+    await getOrderDetails({
+      trader,
+      oldUnderlingBalance,
+      oldUnderlyingDecimals,
+      newUnderlyingDecimals,
+      wallet,
+    });
+
+  // Post the 1271 order (including the flash-loan hint and the pre-hook)
+  const { quoteResults, postSwapOrderFromQuote } = await sdk.getQuote(
+    parameters,
+    advancedSettings
+  );
+
+  // Print the quote
+  printQuote(quoteResults);
+  const buyAmount = quoteResults.amountsAndCosts.afterSlippage.buyAmount;
+
+  // Ask for confirmation before posting the order
+  const confirmed = await confirm(
+    `You will get at least ${buyAmount} COW. ok?`
+  );
+  if (confirmed) {
+    // User allows to transfer the old collateral to the helper contract
+    await approveOldCollateral({
+      wallet,
+      trader,
+      helperContract,
+      oldUnderlingBalance,
+      oldUnderlyingDecimals,
+      oldUnderlyingSymbol,
+    });
+
+    // Post the order
+    const { orderId } = await postSwapOrderFromQuote();
+
+    console.log(
+      `Order created, id: https://explorer.cow.fi/sepolia/orders/${orderId}?tab=overview`
+    );
+  }
+}
+
+async function approveOldCollateral(params: {
+  wallet: ethers.Wallet;
+  trader: string;
+  helperContract: string;
+  oldUnderlingBalance: ethers.BigNumberish;
+  oldUnderlyingDecimals: number;
+  oldUnderlyingSymbol: string;
+}) {
+  const {
+    wallet,
+    trader,
+    helperContract,
+    oldUnderlingBalance,
+    oldUnderlyingDecimals,
+    oldUnderlyingSymbol,
+  } = params;
+
+  // Approve the helper contract to spend the old collateral
+  const oldCollateral = await getErc20Contract(TOKENS.oldCollateral, wallet);
+
+  // Get the allowance for the helper contract
+  const allowance = await oldCollateral.allowance(trader, helperContract);
+  const allowanceFormatted = ethers.utils.formatUnits(
+    allowance,
+    oldUnderlyingDecimals
+  );
+  console.log(
+    `Allowance for the helper contract: ${allowanceFormatted} ${oldUnderlyingSymbol}`
+  );
+
+  if (allowance < oldUnderlingBalance) {
+    console.log(
+      "Alright! First make sure the helper contract has an approval (we could use permit pre-hook instead too)"
+    );
+
+    const tx = await oldCollateral.approve(helperContract, oldUnderlingBalance);
+    await tx.wait();
+  } else {
+    console.log("The helper contract has enough allowance to post the order");
+  }
+}
+
+async function getAssetsInfo(params: {
+  wallet: ethers.Wallet;
+  trader: string;
+}) {
+  const { wallet, trader } = params;
+
   // Get ERC20 balance for oldUnderlying using ethersjs
   const oldUnderlying = await getErc20Contract(TOKENS.oldUnderlying, wallet);
   const oldCollateral = await getErc20Contract(TOKENS.oldCollateral, wallet);
@@ -68,10 +177,41 @@ export async function run() {
     newUnderlying.decimals(),
   ]);
 
-  const expirationTimestamp = 60 * 30; // 30 minutes from now
-  console.log("expirationTimestamp", expirationTimestamp);
+  return {
+    // Old underlying info
+    oldUnderlingBalance,
+    oldUnderlyingSymbol,
+    oldUnderlyingDecimals,
+    oldUnderlyingBalanceFormatted,
 
-  const minReceivedAmount = "1"; // 1 Wei. Technically I would need to ask for a quote. Its a bit tricky, because we would need to ask for a quote with the helper contract as owner. Could be possible with a dirty trick (find an user with balance for the oldUnderlying and ask for a quote to dump it for the newUnderlying)
+    // New underlying info
+    newUnderlyingSymbol,
+    newUnderlyingDecimals,
+  };
+}
+
+async function getOrderDetails(props: {
+  trader: string;
+  oldUnderlingBalance: ethers.BigNumberish;
+  oldUnderlyingDecimals: number;
+  newUnderlyingDecimals: number;
+  wallet: ethers.Wallet;
+}): Promise<{
+  parameters: WithPartialTraderParams<TradeParameters>;
+  advancedSettings?: SwapAdvancedSettings;
+  helperContract: string;
+}> {
+  const {
+    trader,
+    oldUnderlingBalance,
+    oldUnderlyingDecimals,
+    newUnderlyingDecimals,
+    wallet,
+  } = props;
+
+  // Get the minimum receive
+  const minReceivedAmount = "1"; // 1 Wei. Technically I would need to ask for a quote. Its a bit tricky, because we would need to ask for a quote with the helper contract as owner. Could be possible with a dirty trick (find an user with balance for the oldUnderlying and ask for a quote to dump it for the newUnderlying). For simplicity, I start hardcoding to 1 web.
+  const validFor = 60 * 30; // 30 minutes from now
 
   const orderHelperParams = [
     trader, // owner
@@ -80,7 +220,7 @@ export async function run() {
     oldUnderlingBalance,
     TOKENS.newCollateral,
     minReceivedAmount,
-    expirationTimestamp,
+    validFor,
   ];
 
   // Ger factory contract instance
@@ -93,18 +233,13 @@ export async function run() {
   const helperContract: string = await orderHelperFactory.getOrderHelperAddress(
     ...orderHelperParams
   );
-
   // TODO: We might want to use this function to save one RPC call
   // const helperContract = predictDeterministicAddress({
   //   implementation,
-  //   salt: trader,
+  //   salt: getSalt(orderHelperParams),
   //   factoryAddress: COW_AAVE_COLLATERAL_SWAP_HELPER_FACTORY,
   // });
 
-  // Define trade parameters
-  console.log(
-    `Get quote for selling ${oldUnderlyingBalanceFormatted} ${oldUnderlyingSymbol} for ${newUnderlyingSymbol}`
-  );
   const parameters: TradeParameters = {
     kind: OrderKind.SELL,
     amount: oldUnderlingBalance.toString(), // All underlying balance
@@ -116,7 +251,7 @@ export async function run() {
     partiallyFillable: false,
     owner: helperContract as `0x${string}`,
     receiver: helperContract,
-    validFor: expirationTimestamp,
+    validFor,
   };
   console.log("Trade parameters", parameters);
 
@@ -161,65 +296,24 @@ export async function run() {
     dappId: "cow-sdk-scripts://flash-loans/collateralSwapAave",
   };
 
-  // Post the order
-  const { quoteResults, postSwapOrderFromQuote } = await sdk.getQuote(
-    parameters,
-    {
-      additionalParams: {
-        signingScheme: SigningScheme.EIP1271,
-      },
-      appData: {
-        appCode: APP_CODE,
-        metadata: {
-          // @ts-ignore The flash-loan hint is still not added officially to https://github.com/cowprotocol/app-data
-          flashLoan: flashLoanHint,
-          hooks: {
-            pre: [helperContractDeployment],
-          },
+  const advancedSettings: SwapAdvancedSettings = {
+    additionalParams: {
+      signingScheme: SigningScheme.EIP1271,
+    },
+    appData: {
+      appCode: APP_CODE,
+      metadata: {
+        // @ts-ignore The flash-loan hint is still not added officially to https://github.com/cowprotocol/app-data
+        flashLoan: flashLoanHint,
+        hooks: {
+          pre: [helperContractDeployment],
         },
       },
-    }
-  );
+    },
+  };
 
-  printQuote(quoteResults);
-  const buyAmount = quoteResults.amountsAndCosts.afterSlippage.buyAmount;
-
-  const confirmed = await confirm(
-    `You will get at least ${buyAmount} COW. ok?`
-  );
-  if (confirmed) {
-    // Approve the helper contract to spend the old collateral
-    const oldCollateral = await getErc20Contract(TOKENS.oldCollateral, wallet);
-
-    // Get the allowance for the helper contract
-    const allowance = await oldCollateral.allowance(trader, helperContract);
-    const allowanceFormatted = ethers.utils.formatUnits(
-      allowance,
-      oldUnderlyingDecimals
-    );
-    console.log(
-      `Allowance for the helper contract: ${allowanceFormatted} ${oldUnderlyingSymbol}`
-    );
-
-    if (allowance < oldUnderlingBalance) {
-      console.log(
-        "Alright! First make sure the helper contract has an approval (we could use permit pre-hook instead too)"
-      );
-
-      const tx = await oldCollateral.approve(
-        helperContract,
-        oldUnderlingBalance
-      );
-      await tx.wait();
-    } else {
-      console.log("The helper contract has enough allowance to post the order");
-    }
-
-    // Post the order
-    const { orderId } = await postSwapOrderFromQuote();
-
-    console.log(
-      `Order created, id: https://explorer.cow.fi/sepolia/orders/${orderId}?tab=overview`
-    );
-  }
+  return {
+    parameters,
+    advancedSettings,
+  };
 }
