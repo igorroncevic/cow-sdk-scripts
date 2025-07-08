@@ -322,5 +322,6 @@ async function getOrderDetails(props: {
   return {
     parameters,
     advancedSettings,
+    helperContract,
   };
 }
