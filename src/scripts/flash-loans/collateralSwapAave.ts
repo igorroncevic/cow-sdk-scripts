@@ -80,7 +80,7 @@ export async function run() {
 
   // Post the 1271 order (including the flash-loan hint and the pre-hook)
   // TODO: I believe the SDK doesn't handle very well 1271 orders, we might need to use another specific method to pass also the signature either in the quote, or at the time of posting the order.
-  // TODO: The signature should contain the order, so it can be decoded: `GPv2Order.Data memory _order = abi.decode(_signature, (GPv2Order.Data));`
+  // TODO: The signature should contain the order, so it can be decoded: `GPv2Order.Data memory _order = abi.decode(_signature, (GPv2Order.Data));`. . Keep in mind the signature will be simpler in a future implementation, because we don't need all the order data (most of them are already constants in the contract)
   const { quoteResults, postSwapOrderFromQuote } = await sdk.getQuote(
     parameters,
     advancedSettings
@@ -199,6 +199,83 @@ async function getAssetsInfo(params: {
   };
 }
 
+async function getHelperDeploymentPreHook(params: {
+  trader: string;
+  oldUnderlingBalance: ethers.BigNumberish;
+  minReceivedAmount: string;
+  validFor: number;
+  orderHelperFactory: ethers.Contract;
+  wallet: ethers.Wallet;
+}): Promise<{
+  helperContract: string;
+  helperContractDeploymentHook: latest.CoWHook;
+}> {
+  const {
+    trader,
+    oldUnderlingBalance,
+    minReceivedAmount,
+    validFor,
+    orderHelperFactory,
+    wallet,
+  } = params;
+
+  const orderHelperParams = [
+    trader, // owner
+    AAVE_POOL_ADDRESS, // borrower
+    TOKENS.oldCollateral,
+    oldUnderlingBalance,
+    TOKENS.newCollateral,
+    minReceivedAmount,
+    validFor,
+  ];
+
+  console.log("Get helper contract", orderHelperParams);
+  const helperContract: string = await orderHelperFactory.getOrderHelperAddress(
+    ...orderHelperParams
+  );
+  // TODO: We might want to use this function to save one RPC call
+  // const helperContract = predictDeterministicAddress({
+  //   implementation,
+  //   salt: getSalt(orderHelperParams),
+  //   factoryAddress: COW_AAVE_COLLATERAL_SWAP_HELPER_FACTORY,
+  // });
+
+  // Prepare deployment of the helper contract
+  const deployOrderHelperData = orderHelperFactory.interface.encodeFunctionData(
+    "deployOrderHelper",
+    orderHelperParams
+  );
+  console.log("deployOrderHelperData", deployOrderHelperData);
+
+  const gasEstimate = await wallet
+    .estimateGas({
+      to: COW_AAVE_HELPER_FACTORY,
+      data: deployOrderHelperData,
+      value: ethers.constants.Zero,
+    })
+    .catch((error) => {
+      console.error("error estimating gas", error);
+      console.log("Check the call", {
+        to: COW_AAVE_HELPER_FACTORY,
+        data: deployOrderHelperData,
+      });
+      return DEFAULT_GAS_LIMIT;
+    });
+  console.log("gasEstimate", gasEstimate);
+
+  const helperContractDeploymentHook: latest.CoWHook = {
+    target: COW_AAVE_HELPER_FACTORY,
+    callData: deployOrderHelperData,
+    gasLimit: gasEstimate.toString(),
+    dappId: "cow-sdk-scripts://flash-loans/collateralSwapAave",
+  };
+
+  return {
+    helperContract,
+    helperContractDeploymentHook,
+  };
+}
+
 async function getOrderDetails(props: {
   trader: string;
   oldUnderlingBalance: ethers.BigNumberish;
@@ -222,32 +299,23 @@ async function getOrderDetails(props: {
   const minReceivedAmount = "1"; // 1 Wei. Technically I would need to ask for a quote. Its a bit tricky, because we would need to ask for a quote with the helper contract as owner. Could be possible with a dirty trick (find an user with balance for the oldUnderlying and ask for a quote to dump it for the newUnderlying). For simplicity, I start hardcoding to 1 web.
   const validFor = 60 * 30; // 30 minutes from now
 
-  const orderHelperParams = [
-    trader, // owner
-    AAVE_POOL_ADDRESS, // borrower
-    TOKENS.oldCollateral,
-    oldUnderlingBalance,
-    TOKENS.newCollateral,
-    minReceivedAmount,
-    validFor,
-  ];
-
   // Ger factory contract instance
   const orderHelperFactory = new ethers.Contract(
     COW_AAVE_HELPER_FACTORY,
     orderHelperFactoryAbi,
     wallet
   );
-  console.log("Get helper contract", orderHelperParams);
-  const helperContract: string = await orderHelperFactory.getOrderHelperAddress(
-    ...orderHelperParams
-  );
-  // TODO: We might want to use this function to save one RPC call
-  // const helperContract = predictDeterministicAddress({
-  //   implementation,
-  //   salt: getSalt(orderHelperParams),
-  //   factoryAddress: COW_AAVE_COLLATERAL_SWAP_HELPER_FACTORY,
-  // });
+
+  // Get the hook to deploy the helper contract
+  const { helperContractDeploymentHook, helperContract } =
+    await getHelperDeploymentPreHook({
+      trader,
+      oldUnderlingBalance,
+      minReceivedAmount,
+      validFor,
+      orderHelperFactory,
+      wallet,
+    });
 
   const parameters: TradeParameters = {
     kind: OrderKind.SELL,
@@ -275,36 +343,6 @@ async function getOrderDetails(props: {
   };
   console.log("flashLoanHint", flashLoanHint);
 
-  // Prepare deployment of the helper contract
-  const deployOrderHelperData = orderHelperFactory.interface.encodeFunctionData(
-    "deployOrderHelper",
-    orderHelperParams
-  );
-  console.log("deployOrderHelperData", deployOrderHelperData);
-
-  const gasEstimate = await wallet
-    .estimateGas({
-      to: COW_AAVE_HELPER_FACTORY,
-      data: deployOrderHelperData,
-      value: ethers.constants.Zero,
-    })
-    .catch((error) => {
-      console.error("error estimating gas", error);
-      console.log("Check the call", {
-        to: COW_AAVE_HELPER_FACTORY,
-        data: deployOrderHelperData,
-      });
-      return DEFAULT_GAS_LIMIT;
-    });
-  console.log("gasEstimate", gasEstimate);
-
-  const helperContractDeployment: latest.CoWHook = {
-    target: COW_AAVE_HELPER_FACTORY,
-    callData: deployOrderHelperData,
-    gasLimit: gasEstimate.toString(),
-    dappId: "cow-sdk-scripts://flash-loans/collateralSwapAave",
-  };
-
   const advancedSettings: SwapAdvancedSettings = {
     additionalParams: {
       signingScheme: SigningScheme.EIP1271,
@@ -315,7 +353,7 @@ async function getOrderDetails(props: {
         // @ts-ignore The flash-loan hint is still not added officially to https://github.com/cowprotocol/app-data
         flashLoan: flashLoanHint,
         hooks: {
-          pre: [helperContractDeployment],
+          pre: [helperContractDeploymentHook],
         },
       },
     },
