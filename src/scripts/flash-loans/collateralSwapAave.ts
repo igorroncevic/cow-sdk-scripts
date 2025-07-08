@@ -9,8 +9,8 @@ import {
   WithPartialTraderParams,
   SwapAdvancedSettings,
 } from "@cowprotocol/cow-sdk";
-import { ethers } from "ethers";
-import { confirm, getWallet, printQuote } from "../../utils";
+import { ethers, providers } from "ethers";
+import { confirm, getRpcProvider, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { latest } from "@cowprotocol/app-data";
 import { orderHelperFactoryAbi } from "./abi/OrderHelperFactoryAbi";
@@ -33,12 +33,12 @@ const TOKENS = {
   oldCollateral: "0x5b071b590a59395fe4025a0ccc1fcc931aac1830", // aETHWeth
   debt: "0xc4bf5cbdabe595361438f8c6a187bdc330539c60", // GHO
   newUnderlying: "0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8", // USDC
-  newCollateral: "0x40d16fc0236f5686f0a7030063ca493c4dd83358", // aUSDC
+  newCollateral: "0x16dA4541aD1807f4443d92D26044C1147406EB80", // aUSDC
 } as const;
 
 const AAVE_POOL_ADDRESS = "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951"; // See https://search.onaave.com/?q=sepolia
 const COW_AAVE_BORROWER = "0x7d9C4DeE56933151Bc5C909cfe09DEf0d315CB4A"; // See https://github.com/cowprotocol/flash-loan-router/blob/main/networks.json
-const COW_AAVE_HELPER_FACTORY = "0xc55098a66d2225c37bf33c1f7b8b9b0abc8fd32f"; // https://sepolia.etherscan.io/address/0xc55098a66d2225c37bf33c1f7b8b9b0abc8fd32f#code
+const COW_AAVE_HELPER_FACTORY = "0xe7De9F737135AEE2d154D1b6b23414C1bf115109"; // https://sepolia.etherscan.io/address/0xe7De9F737135AEE2d154D1b6b23414C1bf115109#code
 const DEFAULT_GAS_LIMIT = "1000000"; // FIXME: This should not be necessary, it should estimate correctly!
 
 const CHAIN_ID = SupportedChainId.SEPOLIA;
@@ -46,6 +46,8 @@ const CHAIN_ID = SupportedChainId.SEPOLIA;
 export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const trader = wallet.address;
+
+  console.log(`Trader ${trader}`);
 
   // Initialize the SDK with the wallet
   const sdk = new TradingSdk({
@@ -178,7 +180,7 @@ async function getAssetsInfo(params: {
   );
 
   console.log(
-    `Old underlying balance: ${oldUnderlyingBalanceFormatted} ${oldUnderlyingSymbol}`
+    `Old underlying balance as collateral: ${oldUnderlyingBalanceFormatted} ${oldUnderlyingSymbol}`
   );
 
   const newUnderlying = await getErc20Contract(TOKENS.newUnderlying, wallet);
@@ -318,9 +320,14 @@ async function getOrderDetails(props: {
     wallet,
   } = props;
 
+  // validFor is based on block.timestamp
+  const rpc = await getRpcProvider(CHAIN_ID);
+  const block = await rpc.getBlock("latest");  
+  const validFor = block.timestamp + 60 * 5; // 5 minutes from now
+
   // Get the minimum receive
   const minReceivedAmount = "1"; // 1 Wei. Technically I would need to ask for a quote. Its a bit tricky, because we would need to ask for a quote with the helper contract as owner. Could be possible with a dirty trick (find an user with balance for the oldUnderlying and ask for a quote to dump it for the newUnderlying). For simplicity, I start hardcoding to 1 web.
-  const validFor = 60 * 30; // 30 minutes from now
+
 
   // Ger factory contract instance
   const orderHelperFactory = new ethers.Contract(
@@ -342,6 +349,7 @@ async function getOrderDetails(props: {
 
   // Get the hook to swap the collateral
   const collateralSwapHook = getCollateralSwapPostHook({ helperContract });
+  const orderValidFor = validFor - block.timestamp;
 
   const parameters: TradeParameters = {
     kind: OrderKind.SELL,
@@ -354,7 +362,7 @@ async function getOrderDetails(props: {
     partiallyFillable: false,
     owner: helperContract as `0x${string}`,
     receiver: helperContract,
-    validFor,
+    validFor: orderValidFor,
   };
   console.log("Trade parameters", parameters);
 
