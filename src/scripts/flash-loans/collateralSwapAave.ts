@@ -29,19 +29,19 @@ import { orderHelperAbi } from "./abi/OrderHelperAbi";
 // ```
 
 const TOKENS = {
-  oldUnderlying: "0xc558dbdd856501fcd9aaf1e62eae57a9f0629a3c", // WETH
-  oldCollateral: "0x5b071b590a59395fe4025a0ccc1fcc931aac1830", // aETHWeth
-  debt: "0xc4bf5cbdabe595361438f8c6a187bdc330539c60", // GHO
-  newUnderlying: "0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8", // USDC
-  newCollateral: "0x16dA4541aD1807f4443d92D26044C1147406EB80", // aUSDC
+  oldUnderlying: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d", // WXDAI
+  oldCollateral: "0xd0Dd6cEF72143E22cCED4867eb0d5F2328715533", // aWXDAI
+  debt: "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb", // GNO
+  newUnderlying: "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83", // USDC
+  newCollateral: "0xc6B7AcA6DE8a6044E0e32d0c841a89244A10D284", // aUSDC
 } as const;
 
-const AAVE_POOL_ADDRESS = "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951"; // See https://search.onaave.com/?q=sepolia
+const AAVE_POOL_ADDRESS = "0xb50201558B00496A145fE76f7424749556E326D8"; // See https://search.onaave.com/?q=sepolia
 const COW_AAVE_BORROWER = "0x7d9C4DeE56933151Bc5C909cfe09DEf0d315CB4A"; // See https://github.com/cowprotocol/flash-loan-router/blob/main/networks.json
-const COW_AAVE_HELPER_FACTORY = "0xe7De9F737135AEE2d154D1b6b23414C1bf115109"; // https://sepolia.etherscan.io/address/0xe7De9F737135AEE2d154D1b6b23414C1bf115109#code
+const COW_AAVE_HELPER_FACTORY = "0xC55098a66D2225c37Bf33c1F7B8b9B0ABc8fd32f"; // https://sepolia.etherscan.io/address/0xe7De9F737135AEE2d154D1b6b23414C1bf115109#code
 const DEFAULT_GAS_LIMIT = "1000000"; // FIXME: This should not be necessary, it should estimate correctly!
 
-const CHAIN_ID = SupportedChainId.SEPOLIA;
+const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 
 export async function run() {
   const wallet = await getWallet(CHAIN_ID);
@@ -95,18 +95,16 @@ export async function run() {
 
   // Ask for confirmation before posting the order
   const confirmed = await confirm(
-    `You will get at least ${buyAmount} COW. ok?`
+    `You will get at least ${buyAmount} BUY_TOKEN. ok?`
   );
   if (confirmed) {
-    // User allows to transfer the old collateral to the helper contract
-    await approveOldCollateral({
-      wallet,
-      trader,
-      helperContract,
-      oldUnderlingBalance,
-      oldUnderlyingDecimals,
-      oldUnderlyingSymbol,
-    });
+    // Sign the helper contract
+    const orderHelperFactory = new ethers.Contract(
+      COW_AAVE_HELPER_FACTORY,
+      orderHelperFactoryAbi,
+      wallet
+    );
+    await orderHelperFactory.setPreApprovedContracts(helperContract);
 
     // Post the order
     const { orderId } = await postSwapOrderFromQuote();
