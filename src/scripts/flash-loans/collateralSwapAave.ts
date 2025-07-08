@@ -14,6 +14,7 @@ import { confirm, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { latest } from "@cowprotocol/app-data";
 import { orderHelperFactoryAbi } from "./abi/OrderHelperFactoryAbi";
+import { orderHelperAbi } from "./abi/OrderHelperAbi";
 
 // To setup an account to test this script:
 // 1. Create a test account (PK to use in the script)
@@ -276,6 +277,28 @@ async function getHelperDeploymentPreHook(params: {
   };
 }
 
+function getCollateralSwapPostHook(params: {
+  helperContract: string;
+}): latest.CoWHook {
+  const { helperContract } = params;
+
+  // Get the helper contract
+  const helperContractInstance = new ethers.Contract(
+    helperContract,
+    orderHelperAbi
+  );
+
+  const collateralSwapHook: latest.CoWHook = {
+    target: helperContract,
+    callData:
+      helperContractInstance.interface.encodeFunctionData("swapCollateral"),
+    gasLimit: DEFAULT_GAS_LIMIT, // TODO: Estimate gas
+    dappId: "cow-sdk-scripts://flash-loans/collateralSwapAave",
+  };
+
+  return collateralSwapHook;
+}
+
 async function getOrderDetails(props: {
   trader: string;
   oldUnderlingBalance: ethers.BigNumberish;
@@ -317,6 +340,9 @@ async function getOrderDetails(props: {
       wallet,
     });
 
+  // Get the hook to swap the collateral
+  const collateralSwapHook = getCollateralSwapPostHook({ helperContract });
+
   const parameters: TradeParameters = {
     kind: OrderKind.SELL,
     amount: oldUnderlingBalance.toString(), // All underlying balance
@@ -338,8 +364,6 @@ async function getOrderDetails(props: {
     borrower: COW_AAVE_BORROWER,
     token: TOKENS.oldUnderlying,
     amount: oldUnderlingBalance,
-    // TODO: how would we tell the hint we want to send the tokens to the helper?
-    loanReceiver: helperContract, // TODO: not implemented in backend
   };
   console.log("flashLoanHint", flashLoanHint);
 
@@ -354,6 +378,7 @@ async function getOrderDetails(props: {
         flashLoan: flashLoanHint,
         hooks: {
           pre: [helperContractDeploymentHook],
+          post: [collateralSwapHook],
         },
       },
     },
