@@ -49,6 +49,15 @@ export const orderHelperFactoryAbi = [
   },
   {
     type: "function",
+    name: "setPreApprovedContracts",
+    inputs: [
+      { name: "_helper", type: "address", internalType: "address" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getOrderHelperAddress",
     inputs: [
       { name: "_owner", type: "address", internalType: "address" },
