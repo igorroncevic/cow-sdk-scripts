@@ -37,6 +37,11 @@ export const orderHelperFactoryAbi = [
         internalType: "uint256",
       },
       { name: "_validTo", type: "uint32", internalType: "uint32" },
+      {
+        name: "_flashloanFee",
+        type: "uint256",
+        internalType: "uint256",
+      },
     ],
     outputs: [
       {
@@ -83,6 +88,11 @@ export const orderHelperFactoryAbi = [
         internalType: "uint256",
       },
       { name: "_validTo", type: "uint32", internalType: "uint32" },
+      {
+        name: "_flashloanFee",
+        type: "uint256",
+        internalType: "uint256",
+      },
     ],
     outputs: [
       {
