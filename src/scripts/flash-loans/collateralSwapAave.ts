@@ -1,32 +1,45 @@
 import {
   SupportedChainId,
+  OrderSigningUtils,
+  UnsignedOrder
 } from "@cowprotocol/cow-sdk";
 import { ethers } from "ethers";
-import { getWallet } from "../../utils";
+import { confirm, getWallet } from "../../utils";
+import { getErc20Contract } from "../../contracts/erc20";
 import { orderHelperFactoryAbi } from "./abi/OrderHelperFactoryAbi";
 import { orderHelperAbi } from "./abi/OrderHelperAbi";
 import { MetadataApi } from '@cowprotocol/app-data';
+import { utils } from 'ethers'
+import {
+  OrderBalance,
+  OrderKind,
+  hashOrder,
+  type Order} from '@cowprotocol/contracts'
+import { GPv2Settlement__factory } from "@cowprotocol/cow-sdk/dist/common/generated";
+
 
 const TOKENS = {
-  oldUnderlying: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d", // WXDAI
-  oldCollateral: "0xd0Dd6cEF72143E22cCED4867eb0d5F2328715533", // aWXDAI
+  oldUnderlying: "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83", // USDC
+  oldCollateral: "0xc6B7AcA6DE8a6044E0e32d0c841a89244A10D284", // aUSDC
   debt: "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb", // GNO
-  newUnderlying: "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83", // USDC
-  newCollateral: "0xc6B7AcA6DE8a6044E0e32d0c841a89244A10D284", // aUSDC
+  newUnderlying: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d", // WXDAI
+  newCollateral: "0xd0Dd6cEF72143E22cCED4867eb0d5F2328715533", // aWXDAI
 } as const;
 
 const AAVE_POOL_ADDRESS = "0xb50201558B00496A145fE76f7424749556E326D8"; // See https://search.onaave.com/?q=sepolia
-const COW_AAVE_BORROWER = "0x7d9C4DeE56933151Bc5C909cfe09DEf0d315CB4A"; // See https://github.com/cowprotocol/flash-loan-router/blob/main/networks.json
-const COW_AAVE_HELPER_FACTORY = "0x937255bc7b62171e3f6c2373a851048b9e412a23"; // https://sepolia.etherscan.io/address/0xe7De9F737135AEE2d154D1b6b23414C1bf115109#code
+const COW_FLASHLOAN_TRACKER = "0xCB77A75B5fbb2FFE143BD05c3660b4e1fb44929D";
+const COW_AAVE_BORROWER = "0x7d9C4DeE56933151Bc5C909cfe09DEf0d315CB4A";
+const COW_AAVE_HELPER_FACTORY = "0x9364CA1a885CA56b357A62A8DddaFa73D85EC826";
 const DEFAULT_GAS_LIMIT = "1000000"; // FIXME: This should not be necessary, it should estimate correctly!
-const VALID_FOR = 1752266000;
+const VALID_FOR = 1754010000;
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
-const FLASHLOAN_FEE = "10000000000000000";
+const FLASHLOAN_FEE = "10000"; // 0.05% of the flashloan amount
+const OLD_COLLATERAL_AMOUNT = "20000000";
+const NEW_COLLATERAL_AMOUNT = "18000000000000000000";
 
 export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const trader = wallet.address;
-  console.log(`Trader ${trader} needs to approve the collateral to ${COW_AAVE_HELPER_FACTORY}`);
 
   const orderHelperFactory = new ethers.Contract(
     COW_AAVE_HELPER_FACTORY,
@@ -36,27 +49,39 @@ export async function run() {
 
   const orderHelperParams = [
     trader, // owner
-    COW_AAVE_BORROWER, // cow borrower
+    COW_FLASHLOAN_TRACKER,
     TOKENS.oldUnderlying,
-    "20000000000000000000",
+    OLD_COLLATERAL_AMOUNT,
     TOKENS.newUnderlying,
-    "18000000",
+    NEW_COLLATERAL_AMOUNT,
     VALID_FOR,
-    FLASHLOAN_FEE
+    FLASHLOAN_FEE,
+    COW_AAVE_BORROWER
   ];
   console.log("Get helper contract", orderHelperParams);
+
   const helperContract: string = await orderHelperFactory.getOrderHelperAddress(
     ...orderHelperParams
   );
 
   console.log("will use helperContract", helperContract);
 
+  const confirmed = await confirm(
+    `Do you want to approve token ${TOKENS.oldCollateral} to spender ${helperContract}?`
+  );
+  if (confirmed) {
+    const oldCollateral = getErc20Contract(TOKENS.oldCollateral, wallet);
+    const tx = await oldCollateral.approve(helperContract, OLD_COLLATERAL_AMOUNT);
+    await tx.wait();
+    console.log("approved: ", tx.hash);
+  }
+
   const appCode = 'aave-v3-flashloan'
   const flashLoanHint = {
     lender: AAVE_POOL_ADDRESS,
     borrower: helperContract,
     token: TOKENS.oldUnderlying,
-    amount: "20000000000000000000",
+    amount: OLD_COLLATERAL_AMOUNT, // this is actually in UNDERLYING but aave tokens are 1:1
   };
   console.log("flashLoanHint", flashLoanHint);
 
@@ -82,11 +107,16 @@ export async function run() {
             callData: deployOrderHelperData,
             gasLimit: DEFAULT_GAS_LIMIT,
           },
+          {
+            target: helperContract,
+            callData: helperContractInstance.interface.encodeFunctionData("preHook"),
+            gasLimit: DEFAULT_GAS_LIMIT,
+          },
         ],
         post: [
           {
             target: helperContract,
-            callData: helperContractInstance.interface.encodeFunctionData("swapCollateral"),
+            callData: helperContractInstance.interface.encodeFunctionData("postHook"),
             gasLimit: DEFAULT_GAS_LIMIT,
           }
         ],
@@ -94,37 +124,108 @@ export async function run() {
 
     }
   }
-  const metadataApi = new MetadataApi();
+
+  // TODO: Update the metadataApi dependency to avoid this hack
+  //const metadataApi = new MetadataApi();
   const fullAppData = stringify(appDataDoc);
   console.log("fullAppData", fullAppData);
 
   const module = await import('ethers/lib/utils')
   const { keccak256, toUtf8Bytes } = module.default || module
-
-  const preAppDataHex = keccak256(toUtf8Bytes(fullAppData))
-  console.log("preAppDataHex", preAppDataHex);
-  const appDataHex = await metadataApi.appDataHexToCid(preAppDataHex);
-  console.log("appDataHex", appDataHex)
+  const appDataHash = keccak256(toUtf8Bytes(fullAppData))
+  console.log("appDataHash", appDataHash);
   
+  const order: Order = {
+    sellToken: TOKENS.oldCollateral,
+    buyToken: TOKENS.newCollateral,
+    receiver: trader,
+    feeAmount: "0",
+    sellAmount: "19990000", // 20000000 - 10000
+    buyAmount: "18000000000000000000",
+    validTo: VALID_FOR, 
+    appData: appDataHash,
+    kind: OrderKind.SELL,
+    partiallyFillable: false,
+    sellTokenBalance: OrderBalance.ERC20,
+    buyTokenBalance: OrderBalance.ERC20,
+  }
+  const orderHash = hashOrder(await OrderSigningUtils.getDomain(CHAIN_ID), order);
+  console.log("orderHash", orderHash);
+
+  // TODO: There should be an easier way to encode an order
+  const types = [
+    "address", // sellToken
+    "address", // buyToken
+    "address", // receiver
+    "uint256", // sellAmount 
+    "uint256", // buyAmount
+    "uint32", // validTo
+    "bytes32", // appData
+    "uint256", // feeAmount
+    "bytes32", // kind
+    "bool", // partiallyFillable
+    "bytes32", // sellTokenBalance
+    "bytes32", // buyTokenBalance
+  ];
+  const encodedOrder = utils.defaultAbiCoder.encode(types, [
+    order.sellToken,
+    order.buyToken, 
+    order.receiver,
+    order.sellAmount,
+    order.buyAmount,
+    order.validTo,
+    order.appData,
+    order.feeAmount,
+    "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775", // order.kind
+    order.partiallyFillable,
+    "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.sellTokenBalance
+    "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.buyTokenBalance
+  ]);
+  console.log("encodedOrder", encodedOrder);
+
+
+  const signedOrder = await OrderSigningUtils.signOrder(order as UnsignedOrder, CHAIN_ID, wallet);
+  console.log("signedOrder", signedOrder.signature);
+
+  // TODO: ugly. Find a better way to encode the order+signature
+  const fullSingature = utils.defaultAbiCoder.encode(
+    ["tuple(address sellToken, address buyToken, address receiver, uint256 sellAmount, uint256 buyAmount, uint32 validTo, bytes32 appData, uint256 feeAmount, bytes32 kind, bool partiallyFillable, bytes32 sellTokenBalance, bytes32 buyTokenBalance)", "bytes"], 
+    [
+      [
+        order.sellToken,
+        order.buyToken, 
+        order.receiver,
+        order.sellAmount,
+        order.buyAmount,
+        order.validTo,
+        order.appData,
+        order.feeAmount,
+        "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775", // order.kind
+        order.partiallyFillable,
+        "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.sellTokenBalance
+        "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9"
+      ],
+      signedOrder.signature
+    ]);
+  console.log("fullSignature", fullSingature);
 
   const data = {
-    "sellToken": TOKENS.oldUnderlying,
-    "buyToken": TOKENS.newUnderlying,
-    "receiver": helperContract,
+    "sellToken": TOKENS.oldCollateral,
+    "buyToken": TOKENS.newCollateral,
+    "receiver": trader,
     "feeAmount": "0",
-    "sellAmount": "19990000000000000000", // 20000000000000000000 - 10000000000000000
-    "buyAmount": "18000000",
+    "sellAmount": "19990000", // 20000000 - 10000
+    "buyAmount": "18000000000000000000",
     "validTo": VALID_FOR,
     "kind": "sell",
-    "partiallyFillable": true,
+    "partiallyFillable": false,
     "sellTokenBalance": "erc20",
     "buyTokenBalance": "erc20",
     "signingScheme": "eip1271",
-    "signature": "0x000000000000000000000000e91d153e0b41518a2ce8dd3d7944fa863463a97d000000000000000000000000ddafbb505ad214d7b80b1f830fccc89b60fb7a83000000000000000000000000e6950540c88fb6238389a622b3be3c67079a84ee000000000000000000000000000000000000000000000001158e460913d000000000000000000000000000000000000000000000000000000000000001298be000000000000000000000000000000000000000000000000000000000686fee708890759ffe2a084a75f881305cb151d56d6a7c8229c8b8febcc7d939e46b68530000000000000000000000000000000000000000000000000000000000000000f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee34677500000000000000000000000000000000000000000000000000000000000000005a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc95a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9",
+    "signature": fullSingature,
     "from": helperContract.toString(),
     "quoteId": 0,
     "appData": fullAppData,
-    //"appDataHash": preAppDataHex
   }
 
   console.log("data", data);
@@ -140,7 +241,6 @@ export async function run() {
   });
 
   if (!response.ok) {
-    // Handle error response
     const errorText = await response.text();
     throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`);
   }

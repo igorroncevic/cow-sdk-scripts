@@ -106,7 +106,14 @@ export const orderHelperAbi = [
   },
   {
     type: "function",
-    name: "swapCollateral",
+    name: "preHook",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "postHook",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",

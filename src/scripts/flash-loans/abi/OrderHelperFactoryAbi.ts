@@ -15,7 +15,7 @@ export const orderHelperFactoryAbi = [
     name: "deployOrderHelper",
     inputs: [
       { name: "_owner", type: "address", internalType: "address" },
-      { name: "_borrower", type: "address", internalType: "address" },
+      { name: "_tracker", type: "address", internalType: "address" },
       {
         name: "_oldCollateral",
         type: "address",
@@ -42,6 +42,7 @@ export const orderHelperFactoryAbi = [
         type: "uint256",
         internalType: "uint256",
       },
+      { name: "_flashloanPayee", type: "address", internalType: "address" }
     ],
     outputs: [
       {
@@ -66,7 +67,7 @@ export const orderHelperFactoryAbi = [
     name: "getOrderHelperAddress",
     inputs: [
       { name: "_owner", type: "address", internalType: "address" },
-      { name: "_borrower", type: "address", internalType: "address" },
+      { name: "_tracker", type: "address", internalType: "address" },
       {
         name: "_oldCollateral",
         type: "address",
@@ -93,6 +94,7 @@ export const orderHelperFactoryAbi = [
         type: "uint256",
         internalType: "uint256",
       },
+      { name: "_flashloanPayee", type: "address", internalType: "address" }
     ],
     outputs: [
       {
