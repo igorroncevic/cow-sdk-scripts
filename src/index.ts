@@ -36,6 +36,7 @@ import { run as getAcrossBridgingId } from "./scripts/bridging/getAcrossBridging
 import { run as getEthFlowId } from "./scripts/ethflow/getEthFlowId";
 import { run as minimalAppData } from "./scripts/app-data/minimalAppData";
 import { run as getIpfsForLegacyDoc } from "./scripts/app-data/getIpfsForLegacyDoc";
+import { run as postTwapForEOA } from "./scripts/composable-cow/postTwapForEOA";
 
 dotenv.config();
 
@@ -84,7 +85,8 @@ const JOBS: (() => Promise<unknown>)[] = [
   // getAcrossBridgingId,
   // getEthFlowId,
   // minimalAppData,
-  getIpfsForLegacyDoc,
+  // getIpfsForLegacyDoc,
+  postTwapForEOA,
 ];
 
 async function main() {
