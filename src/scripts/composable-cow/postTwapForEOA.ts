@@ -7,7 +7,7 @@ import {
   Twap,
   CowShedSdk,
   COMPOSABLE_COW_CONTRACT_ADDRESS,
-  COW_PROTOCOL_SETTLEMENT_CONTRACT_ADDRESS,
+  OrderBookApi,
 } from "@cowprotocol/cow-sdk";
 
 import { MetadataApi } from "@cowprotocol/app-data";
@@ -33,7 +33,7 @@ const TOKENS = {
   twapBuyToken: "0x177127622c4A00F3d409B75571e12cB3c8973d3c", // COW
 } as const;
 
-const PARTS = 4;
+const PARTS = 2;
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 
@@ -52,7 +52,7 @@ export async function run() {
   const { beforeTwapSellToken, twapSellToken, twapBuyToken } =
     await getAssetsInfo({ wallet, trader: eoaTrader });
 
-  const sellAmount = ethers.utils.parseUnits("0.1", twapSellToken.decimals); // 0.1 EURe
+  const sellAmount = ethers.utils.parseUnits("0.2", twapSellToken.decimals); // 0.1 EURe
   const sellAmountFormatted = ethers.utils.formatUnits(
     sellAmount,
     twapSellToken.decimals
@@ -87,24 +87,32 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
   const { appDataContent: twapAppDataContent, appDataHex: twapAppDataHex } =
     await metadataApi.getAppDataInfo(twapAppData);
 
+  const orderBookApi = new OrderBookApi({
+    chainId: CHAIN_ID,
+  });
+
   // TODO: Create TWAP + Derive shed + set shed as the destination for the TWAP
   const twap = Twap.fromData({
     // The TWAP orders sends the bought tokens to the trader
     receiver: eoaTrader,
     sellAmount: sellAmount,
-    buyAmount: BigNumber.from(1), // TODO: Get another quote and apply a good slippage
+    buyAmount: BigNumber.from(PARTS), // TODO: Get another quote and apply a good slippage
     numberOfParts: BigNumber.from(PARTS),
-    timeBetweenParts: BigNumber.from(1800),
+    timeBetweenParts: BigNumber.from(300),
     sellToken: twapSellToken.address,
     buyToken: twapBuyToken.address,
     appData: twapAppDataHex,
   });
 
+  console.log("TWAP ID:", twap.id);
   console.log("TWAP params for cereation of order", {
     twapParams: twap.leaf,
     twapData: debugStringify(twap.data),
     twapAppDataContent: twapAppDataContent,
   });
+
+  console.log("Uploading TWAP app data to API...");
+  await orderBookApi.uploadAppData(twapAppDataHex, twapAppDataContent);
 
   // Get calldata and gas estimation for the approval
   const approveSellTokenCalldata =
@@ -218,7 +226,8 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
 
       const tx = await beforeTwapSellToken.contract.approve(
         COW_VAULT_RELAYER_CONTRACT,
-        sellAmountIntialTrade
+        ethers.constants.MaxUint256
+        // sellAmountIntialTrade
       );
       console.log(`Approving ${beforeTwapSellToken.symbol}. tx:`, tx.hash);
       await tx.wait();
