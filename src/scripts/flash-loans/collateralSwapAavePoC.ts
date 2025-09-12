@@ -152,7 +152,7 @@ export async function run() {
       hooks: {
         pre: [
           {
-            target: AAVE_COLLATERAL_SWAP_ADAPTER_HOOK,
+            target: AAVE_ADAPTER_FACTORY,
             callData: preHookCalldata,
             gasLimit: DEFAULT_GAS_LIMIT,
           },
