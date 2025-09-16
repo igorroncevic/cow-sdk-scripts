@@ -82,255 +82,6 @@ export const aaveAdapterFactoryAbi = [
     name: "deployAndTransferFlashLoan",
     inputs: [
       {
-        name: "instanceAddress",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "executeOperation",
-    inputs: [
-      {
-        name: "",
-        type: "address[]",
-        internalType: "address[]",
-      },
-      {
-        name: "",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-      {
-        name: "",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "callBackData",
-        type: "bytes",
-        internalType: "bytes",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "flashLoanAndCallBack",
-    inputs: [
-      {
-        name: "lender",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "token",
-        type: "address",
-        internalType: "contract IERC20",
-      },
-      {
-        name: "amount",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "callBackData",
-        type: "bytes",
-        internalType: "bytes",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "getInstanceDeployData",
-    inputs: [
-      {
-        name: "instanceAddress",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "tuple",
-        internalType: "struct DataTypes.InstanceDeployData",
-        components: [
-          {
-            name: "adapterImplementation",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "hookData",
-            type: "tuple",
-            internalType: "struct DataTypes.HookOrderData",
-            components: [
-              {
-                name: "owner",
-                type: "address",
-                internalType: "address",
-              },
-              {
-                name: "sellAsset",
-                type: "address",
-                internalType: "address",
-              },
-              {
-                name: "buyAsset",
-                type: "address",
-                internalType: "address",
-              },
-              {
-                name: "sellAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "buyAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "kind",
-                type: "bytes32",
-                internalType: "bytes32",
-              },
-              {
-                name: "validTo",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "flashLoanAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "flashLoanFeeAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "hookSellAssetAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-              {
-                name: "hookBuyAssetAmount",
-                type: "uint256",
-                internalType: "uint256",
-              },
-            ],
-          },
-        ],
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "getInstanceDeterministicAddress",
-    inputs: [
-      {
-        name: "adapterImplementation",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "hookData",
-        type: "tuple",
-        internalType: "struct DataTypes.HookOrderData",
-        components: [
-          {
-            name: "owner",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "sellAsset",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "buyAsset",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "sellAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "buyAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "kind",
-            type: "bytes32",
-            internalType: "bytes32",
-          },
-          {
-            name: "validTo",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "flashLoanAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "flashLoanFeeAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "hookSellAssetAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "hookBuyAssetAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-        ],
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "initiateInstanceData",
-    inputs: [
-      {
         name: "owner",
         type: "address",
         internalType: "address",
@@ -440,15 +191,75 @@ export const aaveAdapterFactoryAbi = [
   },
   {
     type: "function",
-    name: "instanceDeployData",
+    name: "executeOperation",
     inputs: [
+      {
+        name: "",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+      {
+        name: "",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
       {
         name: "",
         type: "address",
         internalType: "address",
       },
+      {
+        name: "callBackData",
+        type: "bytes",
+        internalType: "bytes",
+      },
     ],
     outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "flashLoanAndCallBack",
+    inputs: [
+      {
+        name: "lender",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "token",
+        type: "address",
+        internalType: "contract IERC20",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "callBackData",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "getInstanceDeterministicAddress",
+    inputs: [
       {
         name: "adapterImplementation",
         type: "address",
@@ -515,6 +326,13 @@ export const aaveAdapterFactoryAbi = [
             internalType: "uint256",
           },
         ],
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
       },
     ],
     stateMutability: "view",
@@ -733,17 +551,7 @@ export const aaveAdapterFactoryAbi = [
   },
   {
     type: "error",
-    name: "InstanceAlreadyActive",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "InstanceAlreadyDeployed",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "InstanceInvalid",
     inputs: [],
   },
   {

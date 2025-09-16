@@ -1,7 +1,8 @@
 import {
   SupportedChainId,
   OrderSigningUtils,
-  UnsignedOrder
+  UnsignedOrder,
+  SellTokenSource
 } from "@cowprotocol/cow-sdk";
 import { ethers } from "ethers";
 import { confirm, getWallet } from "../../utils";
@@ -27,11 +28,11 @@ const TOKENS = {
 } as const;
 
 const AAVE_POOL_ADDRESS = "0xb50201558B00496A145fE76f7424749556E326D8"; // See https://search.onaave.com/?q=sepolia
-const AAVE_ADAPTER_FACTORY = "0x6B2bD6b1f106B6a74064944acEF54c8227a76813";
-const AAVE_COLLATERAL_SWAP_ADAPTER_HOOK = "0x22F99477F58802bebC0eC6628359bDe2564b3fd8";
+const AAVE_ADAPTER_FACTORY = "0xF7A1e2EdEBC8Af5C54B5cce8C5589dE1a00AbFBb";
+const AAVE_COLLATERAL_SWAP_ADAPTER_HOOK = "0xC245cdB7733309872287B0192cC85D5d9d057ED2";
 
 const DEFAULT_GAS_LIMIT = "1000000"; // FIXME: This should not be necessary, it should estimate correctly!
-const VALID_FOR = 1757625633;
+const VALID_FOR = 1758060000;
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 const FLASHLOAN_FEE = "10000000000000000"; // 0.05% of the flashloan amount
 const OLD_COLLATERAL_AMOUNT = "20000000000000000000";
@@ -74,14 +75,18 @@ export async function run() {
   }
 
   let order = {
-    trader: trader,
-    kind: KIND_SELL,
     sellToken: TOKENS.oldUnderlying,
     buyToken: TOKENS.newUnderlying,
+    receiver: "0", // to be updated later
+    feeAmount: "0",
     sellAmount: "19990000000000000000",
     buyAmount: NEW_COLLATERAL_AMOUNT,
-    feeAmount: 0,
-    receiver: "0" // to be updated later
+    validTo: VALID_FOR,
+    kind: KIND_SELL,
+    partiallyFillable: false,
+    appData: ethers.constants.HashZero,
+    sellTokenBalance: "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9",
+    buyTokenBalance: "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9",
   }
 
   const hookOrderData = {
@@ -131,7 +136,12 @@ export async function run() {
   // Prepare deployment of the helper contract
   const preHookCalldata = adapterFactory.interface.encodeFunctionData(
     "deployAndTransferFlashLoan",
-    [expectedInstanceAddress]
+    [
+      trader,
+      AAVE_COLLATERAL_SWAP_ADAPTER_HOOK,
+      hookAmounts,
+      order,
+    ]
   );
 
   const adapterHookInstance = new ethers.Contract(
