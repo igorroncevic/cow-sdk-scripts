@@ -8,7 +8,7 @@ import { ethers } from "ethers";
 import { confirm, getWallet } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { aaveAdapterFactoryAbi } from "./abi/AaveAdapterFactory";
-import { collateralSwapAdapterHookAbi } from "./abi/CollateralSwapAdapterHook";
+import { repayWithCollateralAdapterHookAbi } from "./abi/RepayWithCollateralAdapterHook";
 import { MetadataApi } from '@cowprotocol/app-data';
 import { utils } from 'ethers'
 import {
@@ -20,24 +20,23 @@ import { GPv2Settlement__factory } from "@cowprotocol/cow-sdk/dist/common/genera
 
 
 const TOKENS = {
-  oldUnderlying: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d", // WXDAI
-  oldCollateral: "0xd0Dd6cEF72143E22cCED4867eb0d5F2328715533", // aGnoWXDAI
+  underlying: "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0", // USDC.e
+  collateral: "0xC0333cb85B59a788d8C7CAe5e1Fd6E229A3E5a65", // aUSDC.e
   debt: "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb", // GNO
-  newUnderlying: "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0", // USDC.e
-  newCollateral: "0xC0333cb85B59a788d8C7CAe5e1Fd6E229A3E5a65", // aUSDC.e
 } as const;
 
 const AAVE_POOL_ADDRESS = "0xb50201558B00496A145fE76f7424749556E326D8"; // See https://search.onaave.com/?q=sepolia
 const AAVE_ADAPTER_FACTORY = "0x1186B5ad42E3e6d6c6901FC53b4A367540E6EcFE";
-const AAVE_COLLATERAL_SWAP_ADAPTER_HOOK = "0x95EBc31ea3Df802FAee73286b1f4A1c3cCdb3352";
+const AAVE_REPAY_DEBT_WITH_COLLATERAL_ADAPTER_HOOK = "0x9b80D127764c477165B31A9d1C49893Ece648A19";
 
 const DEFAULT_GAS_LIMIT = "1000000"; // FIXME: This should not be necessary, it should estimate correctly!
-const VALID_FOR = 1758300000;
+const VALID_FOR = 1758320000;
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
-const FLASHLOAN_FEE = "10000000000000000"; // 0.05% of the flashloan amount
-const OLD_COLLATERAL_AMOUNT = "20000000000000000000";
-const NEW_COLLATERAL_AMOUNT = "18000000";
-const KIND_SELL = "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775";
+const FLASHLOAN_FEE = "1000"; // 0.05% of the flashloan amount
+const FLASHLOAN_AMOUNT = "2000000";
+const SELL_AMOUNT = "1999000"; // Enough to cover the debt. ~ 1.9 USDC.e
+const BUY_AMOUNT = "11000000000000000"; // 0.011 GNO
+const KIND_BUY = "0x6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc";
 
 function getEmptyPermitSig() {
   return {
@@ -62,27 +61,27 @@ export async function run() {
   const flashLoanParams = {
     borrower: AAVE_ADAPTER_FACTORY,
     lender: AAVE_POOL_ADDRESS,
-    flashLoanAsset: TOKENS.oldUnderlying,
-    flashLoanAmount: OLD_COLLATERAL_AMOUNT,
+    flashLoanAsset: TOKENS.underlying,
+    flashLoanAmount: FLASHLOAN_AMOUNT,
     flashLoanFee: FLASHLOAN_FEE
   }
 
   const hookAmounts = {
     flashLoanAmount: flashLoanParams.flashLoanAmount,
     flashLoanFeeAmount: flashLoanParams.flashLoanFee,
-    sellAssetAmount: OLD_COLLATERAL_AMOUNT,
-    buyAssetAmount: NEW_COLLATERAL_AMOUNT
+    sellAssetAmount: FLASHLOAN_AMOUNT,
+    buyAssetAmount: BUY_AMOUNT
   }
 
   let order = {
-    sellToken: TOKENS.oldUnderlying,
-    buyToken: TOKENS.newUnderlying,
+    sellToken: TOKENS.underlying,
+    buyToken: TOKENS.debt,
     receiver: "0", // to be updated later
     feeAmount: "0",
-    sellAmount: "19990000000000000000",
-    buyAmount: NEW_COLLATERAL_AMOUNT,
+    sellAmount: SELL_AMOUNT,
+    buyAmount: BUY_AMOUNT,
     validTo: VALID_FOR,
-    kind: KIND_SELL,
+    kind: KIND_BUY,
     partiallyFillable: false,
     appData: ethers.constants.HashZero,
     sellTokenBalance: "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9",
@@ -103,10 +102,10 @@ export async function run() {
     hookBuyAssetAmount: hookAmounts.buyAssetAmount
   }
 
-  console.log("Get deterministic address params", AAVE_COLLATERAL_SWAP_ADAPTER_HOOK, hookOrderData);
+  console.log("Get deterministic address params", AAVE_REPAY_DEBT_WITH_COLLATERAL_ADAPTER_HOOK, hookOrderData);
 
   const expectedInstanceAddress: string = await adapterFactory.getInstanceDeterministicAddress(
-    AAVE_COLLATERAL_SWAP_ADAPTER_HOOK,
+    AAVE_REPAY_DEBT_WITH_COLLATERAL_ADAPTER_HOOK,
     hookOrderData
   )
 
@@ -114,22 +113,22 @@ export async function run() {
   order.receiver = expectedInstanceAddress;
 
   const confirmed = await confirm(
-    `Do you want to approve token ${TOKENS.oldCollateral} to spender ${expectedInstanceAddress}?`
+    `Do you want to approve token ${TOKENS.collateral} to spender ${expectedInstanceAddress}?`
   );
   if (confirmed) {
-    const oldCollateral = getErc20Contract(TOKENS.oldCollateral, wallet);
-    const tx = await oldCollateral.approve(expectedInstanceAddress, OLD_COLLATERAL_AMOUNT);
+    const collateral = getErc20Contract(TOKENS.collateral, wallet);
+    const tx = await collateral.approve(expectedInstanceAddress, FLASHLOAN_AMOUNT);
     await tx.wait();
     console.log("approved: ", tx.hash);
   }
 
   const appCode = 'aave-v3-flashloan'
   const flashLoanHint = {
-    amount: OLD_COLLATERAL_AMOUNT, // this is actually in UNDERLYING but aave tokens are 1:1
+    amount: FLASHLOAN_AMOUNT, // this is actually in UNDERLYING but aave tokens are 1:1
     receiver: AAVE_ADAPTER_FACTORY,
     liquidityProvider: AAVE_POOL_ADDRESS,
     protocolAdapter: AAVE_ADAPTER_FACTORY,
-    token: TOKENS.oldUnderlying
+    token: TOKENS.underlying
   };
   console.log("flashLoanHint", flashLoanHint);
 
@@ -138,7 +137,7 @@ export async function run() {
     "deployAndTransferFlashLoan",
     [
       trader,
-      AAVE_COLLATERAL_SWAP_ADAPTER_HOOK,
+      AAVE_REPAY_DEBT_WITH_COLLATERAL_ADAPTER_HOOK,
       hookAmounts,
       order,
     ]
@@ -146,11 +145,11 @@ export async function run() {
 
   const adapterHookInstance = new ethers.Contract(
     expectedInstanceAddress,
-    collateralSwapAdapterHookAbi
+    repayWithCollateralAdapterHookAbi
   );
 
   const postHookCalldata = adapterHookInstance.interface.encodeFunctionData(
-    "collateralSwapWithFlashLoan",
+    "repayDebtWithFlashLoan",
     [getEmptyPermitSig()]
   );
 
@@ -198,7 +197,7 @@ export async function run() {
     buyAmount: order.buyAmount,
     validTo: VALID_FOR, 
     appData: appDataHash,
-    kind: OrderKind.SELL,
+    kind: OrderKind.BUY,
     partiallyFillable: false,
     sellTokenBalance: OrderBalance.ERC20,
     buyTokenBalance: OrderBalance.ERC20,
@@ -230,7 +229,7 @@ export async function run() {
     cowOrder.validTo,
     cowOrder.appData,
     cowOrder.feeAmount,
-    "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775", // order.kind
+    KIND_BUY,
     cowOrder.partiallyFillable,
     "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.sellTokenBalance
     "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.buyTokenBalance
@@ -254,7 +253,7 @@ export async function run() {
         cowOrder.validTo,
         cowOrder.appData,
         cowOrder.feeAmount,
-        "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775", // order.kind
+        KIND_BUY,
         cowOrder.partiallyFillable,
         "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9", // order.sellTokenBalance
         "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9"
@@ -272,7 +271,7 @@ export async function run() {
     "sellAmount": cowOrder.sellAmount,
     "buyAmount": cowOrder.buyAmount,
     "validTo": cowOrder.validTo,
-    "kind": "sell",
+    "kind": "buy",
     "partiallyFillable": false,
     "sellTokenBalance": "erc20",
     "buyTokenBalance": "erc20",
