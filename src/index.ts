@@ -38,6 +38,7 @@ import { run as minimalAppData } from "./scripts/app-data/minimalAppData";
 import { run as collateralSwapAave } from "./scripts/flash-loans/collateralSwapAave";
 import { run as collateralSwapAavePoC } from "./scripts/flash-loans/collateralSwapAavePoC";
 import { run as repayDebtWithCollateralAavePoC } from "./scripts/flash-loans/repayDebtWithCollateralAavePoC";
+import { run as debtSwapAavePoC } from "./scripts/flash-loans/debtSwapAavePoC";
 
 dotenv.config();
 
@@ -88,7 +89,8 @@ const JOBS: (() => Promise<unknown>)[] = [
   // getEthFlowId,
   // minimalAppData,
   // collateralSwapAavePoC,
-  repayDebtWithCollateralAavePoC,
+  //repayDebtWithCollateralAavePoC,
+  debtSwapAavePoC,
 ];
 
 async function main() {
