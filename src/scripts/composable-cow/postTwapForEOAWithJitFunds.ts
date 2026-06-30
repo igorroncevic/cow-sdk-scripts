@@ -6,16 +6,22 @@ import {
   OrderKind,
   TradingSdk,
   Twap,
-  CowShedSdk,
   COMPOSABLE_COW_CONTRACT_ADDRESS,
   OrderBookApi,
 } from "@cowprotocol/cow-sdk";
 
 import { MetadataApi } from "@cowprotocol/app-data";
 import { BigNumber, ethers } from "ethers";
-import { confirm, debugStringify, getWallet, printQuote } from "../../utils";
+import {
+  confirm,
+  debugStringify,
+  getExplorerUrl,
+  getWallet,
+  printQuote,
+} from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { getComposableCowPollerContract } from "../../contracts/composable-cow-poller";
+import { getCowShedSdk } from "./cowShed";
 
 const DEFAULT_GAS_LIMIT = 500_000n;
 
@@ -31,17 +37,9 @@ const TOKENS = {
   twapBuyToken: "0x177127622c4A00F3d409B75571e12cB3c8973d3c", // COW
 } as const;
 
-const PARTS = 2;
-const TIME_BETWEEN_PARTS = 300; // seconds
-
-// The sell=buy order's only purpose is to get the post-hook (which creates the
-// TWAP) executed gaslessly via a settlement.
-//
-// It does NOT move the full TWAP sell amount: This is why no the recipient of the funds is still the EOA.
-// as opposed to what src/scripts/composable-cow/postTwapForEOA.ts does
-//
-// Thanks to JIT funding, each part is pulled from the EOA right before it settles.
-const SELL_BUY_ORDER_BUY_AMOUNT = "1"; // 1 wei of sDAI to buy (arrives to the EOA)
+const TWAP_PARTS = 2;
+const TWAP_TIME_BETWEEN_PARTS = 60; // 60s
+const TWAP_SLIPPAGE_BPS = 1000; // 10%
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 
@@ -59,32 +57,52 @@ export async function run() {
   // Get some info about the assets
   const { twapSellToken, twapBuyToken } = await getAssetsInfo({ wallet });
 
-  const sellAmount = ethers.utils.parseUnits("0.2", twapSellToken.decimals); // total TWAP sell amount
-  const sellAmountFormatted = ethers.utils.formatUnits(
-    sellAmount,
+  // First order (sell=buy order):
+  //   The sell=buy order'sonly purpose is to get the post-hook (which creates the
+  //   TWAP) executed gaslessly via a settlement.
+  //
+  //   It does NOT move the full TWAP sell amount: This is why no the recipient of the funds is still the EOA.
+  //   as opposed to what src/scripts/composable-cow/postTwapForEOA.ts does
+  //
+  //   Thanks to JIT funding, each part is pulled from the EOA right before it settles.
+  const firstOrderBuyAmount = BigNumber.from("1"); // sell=buy order: Buy 1 wei of sDAI
+
+  // TWAP Order:
+  const fullSellAmount = ethers.utils.parseUnits("0.2", twapSellToken.decimals); // TWAP order: Sell a total of 0.2 sDAI
+  const fullSellAmountFormatted = ethers.utils.formatUnits(
+    fullSellAmount,
     twapSellToken.decimals,
   );
-  const sellBuyOrderBuyAmount = BigNumber.from(SELL_BUY_ORDER_BUY_AMOUNT); // 1 wei of sDAI
 
-  const cowShedSdk = new CowShedSdk({
-    factoryOptions: {
-      factoryAddress: "0x4f4350bf2c74aacd508d598a1ba94ef84378793d",
-      implementationAddress: "0x6773d5aA31A1EAD34127D564D6E258E66254EbDb",
-      proxyCreationCode:
-        "0x60a03461009557601f61033d38819003918201601f19168301916001600160401b0383118484101761009957808492604094855283398101031261009557610052602061004b836100ad565b92016100ad565b6080527f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc5560405161027b90816100c28239608051818181608b01526101750152f35b5f80fd5b634e487b7160e01b5f52604160045260245ffd5b51906001600160a01b03821682036100955756fe60806040526004361015610018575b3661019757610197565b5f3560e01c8063025b22bc146100375763f851a4400361000e57610116565b346101125760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101125760043573ffffffffffffffffffffffffffffffffffffffff81169081810361011257337f000000000000000000000000000000000000000000000000000000000000000073ffffffffffffffffffffffffffffffffffffffff160361010d577f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc557fbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b5f80a2005b61023d565b5f80fd5b34610112575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261011257602061014e61016c565b73ffffffffffffffffffffffffffffffffffffffff60405191168152f35b33300361010d577f000000000000000000000000000000000000000000000000000000000000000090565b60ff7f68df44b1011761f481358c0f49a711192727fb02c377d697bcb0ea8ff8393ac0541615806101f0575b1561023d577ff92ee8a9000000000000000000000000000000000000000000000000000000005f5260045ffd5b507fc4d66de8000000000000000000000000000000000000000000000000000000007fffffffff000000000000000000000000000000000000000000000000000000005f351614156101c3565b5f807f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc54368280378136915af43d5f803e15610277573d5ff35b3d5ffd",
-    },
-  });
+  const partSellAmount = fullSellAmount.div(TWAP_PARTS);
+  const partSellAmountFormatted = ethers.utils.formatUnits(
+    partSellAmount,
+    twapSellToken.decimals,
+  );
+
+  const cowShedSdk = getCowShedSdk();
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, eoaTrader);
   console.log("CowShed account:", cowShed);
 
   // Describe the flow
   console.log(
-    `TWAP sell ${sellAmountFormatted} ${twapSellToken.symbol} for ${twapBuyToken.symbol} in ${PARTS} parts, funded just-in-time.
+    `TWAP sell ${fullSellAmountFormatted} ${twapSellToken.symbol} for ${twapBuyToken.symbol} in ${TWAP_PARTS} parts (funded just-in-time).
+
 The setup is done with a gasless sell=buy order with a post-hook:
-  - Sell=buy order: BUY ${SELL_BUY_ORDER_BUY_AMOUNT} wei of ${twapSellToken.symbol} with ${twapSellToken.symbol} (sell == buy), so the only thing it does is carry the post-hook.
-  - Post-hook (via cow-shed): approve the Vault Relayer + create the TWAP. Owner of the TWAP is cow-shed (${cowShed}).
-The EOA keeps the ${twapSellToken.symbol} and approves the ComposableCowPoller (${COMPOSABLE_COW_POLLER_ADDRESS}).
-Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exactly that part's sell amount from the EOA into cow-shed.`,
+  - Sell=buy order: BUY 1 wei of ${twapSellToken.symbol} with ${twapSellToken.symbol} (sell == buy)
+  - Order executes a post-hook (via cow-shed): 
+      - Approve the Vault Relayer
+      - Create the TWAP. Owner of the TWAP is cow-shed (${cowShed}).
+      - Technically, we can include more things here which are left out of this PoC but are a good idea for the production flow:
+         - Approve the ComposableCowPoller 
+         - Register the JIT funding schedule on ComposableCowPoller
+
+The EOA keeps the 1 wei of ${twapSellToken.symbol}, which means that the EOA is the recipient of the first order.
+The order will have the side-effects described above. 
+
+Watch Tower will detect the TWAP and create each part, which will settle and send the proceeds back to the EOA.
+Before each part settles, the hook calls poller.topUp(ctx), pulling exactly that part's sell amount from the EOA into cow-shed.
+`,
   );
 
   // Generate app data for TWAP order
@@ -101,6 +119,37 @@ Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exact
     chainId: CHAIN_ID,
   });
 
+  // Quote a single part (sell token -> buy token) to derive a sensible buy amount
+  // limit. We pass our slippage tolerance so `afterSlippage.buyAmount` is the
+  // minimum we are willing to receive per part. The TWAP's total buy amount is
+  // then that per-part minimum scaled by the number of parts.
+  const { quoteResults: partQuote } = await sdk.getQuote({
+    kind: OrderKind.SELL,
+    sellToken: twapSellToken.address,
+    sellTokenDecimals: twapSellToken.decimals,
+    buyToken: twapBuyToken.address,
+    buyTokenDecimals: twapBuyToken.decimals,
+    amount: partSellAmount.toString(),
+    owner: eoaTrader,
+    slippageBps: TWAP_SLIPPAGE_BPS,
+  });
+  // Expected amount (net of costs, before slippage) and the minimum we will sign
+  // (after slippage), both per part and scaled to the whole TWAP.
+  const expectedPartBuyAmount = BigNumber.from(
+    partQuote.amountsAndCosts.afterNetworkCosts.buyAmount,
+  );
+  const partBuyAmount = BigNumber.from(
+    partQuote.amountsAndCosts.afterSlippage.buyAmount,
+  );
+  const expectedTwapBuyAmount = expectedPartBuyAmount.mul(TWAP_PARTS);
+  const twapBuyAmount = partBuyAmount.mul(TWAP_PARTS);
+  const fmt = (amount: BigNumber) =>
+    `${ethers.utils.formatUnits(amount, twapBuyToken.decimals)} ${twapBuyToken.symbol}`;
+  console.log(
+    `TWAP buy amount per part: ~${fmt(expectedPartBuyAmount)} expected, ${fmt(partBuyAmount)} min (after ${TWAP_SLIPPAGE_BPS / 100}% slippage).
+TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmount)} min.`,
+  );
+
   // Build the TWAP. Owner is cow-shed (the order owner / pull destination); the
   // bought tokens are sent to the trader. `startTime` defaults to AT_MINING_TIME
   // (t0 = 0), so `createCalldata` uses `createWithContext` with the
@@ -108,10 +157,10 @@ Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exact
   // what lets the poller's `getTradeableOrder` resolve the live part.
   const twap = Twap.fromData({
     receiver: eoaTrader,
-    sellAmount: sellAmount,
-    buyAmount: BigNumber.from(PARTS), // TODO: Get another quote and apply a good slippage
-    numberOfParts: BigNumber.from(PARTS),
-    timeBetweenParts: BigNumber.from(TIME_BETWEEN_PARTS),
+    sellAmount: fullSellAmount,
+    buyAmount: twapBuyAmount,
+    numberOfParts: BigNumber.from(TWAP_PARTS),
+    timeBetweenParts: BigNumber.from(TWAP_TIME_BETWEEN_PARTS),
     sellToken: twapSellToken.address,
     buyToken: twapBuyToken.address,
     appData: twapAppDataHex,
@@ -171,9 +220,13 @@ Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exact
     });
   console.log("Signed approve+twap calldata:", approveAndTwap);
 
-  // Sell=buy order: a minimal sell == buy order whose sole purpose is to execute the
-  // post-hook that creates the TWAP.
-  // It does not move the full TWAP sell amount.
+  // Sell=buy order (so, it's a no-operation order)
+  // Both sellToken and buyOrder matches the TWAP's sellToken
+  // The post-hook that creates the TWAP.
+  // It does not move the full TWAP sell amount:
+  //   - This is why the trade amount tries to be minimal (BUY 1 wei, for whatever the quote endpoint said I need to pay for gas)
+  //   - Because funds don't arrive to cow-shed, the recipient can be the EOA (this is where the 1 wei is bought)
+  //   - The funds will be pulled in follow up order's hook (orders will automatically be created by watch-tower)
   const { quoteResults, postSwapOrderFromQuote } = await sdk.getQuote(
     {
       kind: OrderKind.BUY,
@@ -181,9 +234,8 @@ Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exact
       sellTokenDecimals: twapSellToken.decimals,
       buyToken: twapSellToken.address, // sell == buy
       buyTokenDecimals: twapSellToken.decimals,
-      amount: sellBuyOrderBuyAmount.toString(), // buy 1 wei of sDAI
-
-      receiver: eoaTrader, // bought tokens stay with the trader; cow-shed needs no funds
+      amount: firstOrderBuyAmount.toString(), // buy 1 wei of sDAI
+      receiver: eoaTrader, // bought tokens stay with the trader; cow-shed needs no funds until each part is settled
       owner: eoaTrader,
       partiallyFillable: false,
       validFor: 1800,
@@ -216,12 +268,17 @@ Before each part settles, the watch-tower calls poller.topUp(ctx), pulling exact
   const confirmed = await confirm(
     `This will:
   1. Approve the Vault Relayer to spend ${twapSellToken.symbol} (for the sell=buy order).
-  2. Approve the ComposableCowPoller to spend up to ${sellAmountFormatted} ${twapSellToken.symbol} (the full TWAP sell amount, pulled JIT).
+  2. Approve the ComposableCowPoller to spend up to ${fullSellAmountFormatted} ${twapSellToken.symbol} (the full TWAP sell amount, pulled JIT).
   3. Register the JIT funding schedule on the poller (funder: your EOA, owner: cow-shed).
   4. Place the sell=buy order, whose post-hook creates the TWAP.
   ...
-  5. [watch-tower] Detects the TWAP and creates each part, which settle and proceeds are sent back to the EOA. The orders are owned by cow-shed, check explorer: https://explorer.cow.fi/gc/address/${cowShed}
-The watch-tower will then pull ${twapSellToken.symbol} from your EOA part by part. ok?`,
+  5. [watch-tower] Detects the TWAP and creates each part, which settle and proceeds are sent back to the EOA. 
+
+🥳 Each part will poll ${partSellAmountFormatted} ${twapSellToken.symbol} from your EOA before filling.
+
+Your EOA will receive: ~${fmt(expectedTwapBuyAmount)} (expected), at least ${fmt(twapBuyAmount)} (min, after ${TWAP_SLIPPAGE_BPS / 100}% slippage) across the ${TWAP_PARTS} parts.
+
+ok?`,
   );
   if (!confirmed) {
     console.log("Aborted");
@@ -241,16 +298,18 @@ The watch-tower will then pull ${twapSellToken.symbol} from your EOA part by par
   });
 
   // 2. Approve the poller to pull the full TWAP sell amount from the EOA over time
+  //    NOTE: For permit tokens, we can include the permit call as part of the first order
   await ensureAllowance({
     token: twapSellToken,
     owner: eoaTrader,
     spender: COMPOSABLE_COW_POLLER_ADDRESS,
-    requiredAmount: sellAmount,
+    requiredAmount: fullSellAmount,
     label: "ComposableCowPoller",
   });
 
   // 3. Register the JIT funding schedule (only the funder may register).
-  // NOTE: I could make the poller registration also accept a signature. This way, it can be also part of the sell-buy hook that creates the TWAP
+  // NOTE: We could make the poller registration also accept a signature.
+  // This way, this part can always be chained as part of the first-order post-hook and we don't need this transaction
   const poller = getComposableCowPollerContract(
     COMPOSABLE_COW_POLLER_ADDRESS,
     wallet,
@@ -268,7 +327,7 @@ The watch-tower will then pull ${twapSellToken.symbol} from your EOA part by par
       owner: cowShed,
       staticInput,
     });
-    console.log("Register tx:", registerTx.hash);
+    console.log("Register tx:", getExplorerUrl(CHAIN_ID, registerTx.hash));
     await registerTx.wait();
     console.log("Schedule registered");
   }
@@ -279,7 +338,9 @@ The watch-tower will then pull ${twapSellToken.symbol} from your EOA part by par
     `Sell=buy order created, id: https://explorer.cow.fi/gc/orders/${orderId}?tab=overview`,
   );
   console.log(
-    `Once it settles, the TWAP (ctx ${ctx}) will be live and funded just-in-time by the watch-tower.`,
+    `Once it settles, the TWAP (ctx ${ctx}) will be live and funded (just-in-time). 
+    
+Monitor parts in https://explorer.cow.fi/gc/address/${cowShed}`,
   );
 }
 
@@ -304,7 +365,10 @@ async function ensureAllowance(params: {
 
   console.log(`Approving ${token.symbol} for ${label}...`);
   const tx = await token.contract.approve(spender, ethers.constants.MaxUint256);
-  console.log(`Approving ${token.symbol} for ${label}. tx:`, tx.hash);
+  console.log(
+    `Approving ${token.symbol} for ${label}. tx:`,
+    getExplorerUrl(CHAIN_ID, tx.hash),
+  );
   await tx.wait();
   console.log(`${token.symbol} approved for ${label}`);
 }
