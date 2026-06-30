@@ -38,8 +38,14 @@ const TOKENS = {
 } as const;
 
 const TWAP_PARTS = 2;
-const TWAP_TIME_BETWEEN_PARTS = 60; // 60s
-const TWAP_SLIPPAGE_BPS = 1000; // 10%
+const TWAP_TIME_BETWEEN_PARTS = 120; // 2min
+const TWAP_SLIPPAGE_BPS = 1000; // 1000 bps (10%)
+const FIRST_ORDER_SLIPPAGE_BPS = 20000000000; // 200,000,000% // TODO: This was a test because I could see backend not executing the order if the sellAmount was subcent. But this should be something like 0.5%
+
+// The TWAP handler (ComposableCoW order type). Deterministic across chains.
+const TWAP_HANDLER = "0x6cF1e9cA41f7611dEf408122793c358a3d11E5a5";
+// Gas budget for the topUp pre-hook on each part (SLOADs + getTradeableOrder + transferFrom).
+const TOPUP_HOOK_GAS_LIMIT = "350000";
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 
@@ -84,6 +90,24 @@ export async function run() {
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, eoaTrader);
   console.log("CowShed account:", cowShed);
 
+  // The poller schedule key. It is derived from appData-INDEPENDENT fields
+  // (funder, handler, owner, salt), which is exactly what lets us embed
+  // `topUp(id)` as a pre-hook inside the TWAP's own appData: the order's `ctx`
+  // contains the appData hash, so keying on `ctx` would be circular, but `id`
+  // is not. We choose the salt, so we can compute `id` before the appData.
+  const poller = getComposableCowPollerContract(
+    COMPOSABLE_COW_POLLER_ADDRESS,
+    wallet,
+  );
+  const twapSalt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+  const id: string = await poller.scheduleId(
+    eoaTrader,
+    TWAP_HANDLER,
+    cowShed,
+    twapSalt,
+  );
+  console.log("Poller schedule id:", id);
+
   // Describe the flow
   console.log(
     `TWAP sell ${fullSellAmountFormatted} ${twapSellToken.symbol} for ${twapBuyToken.symbol} in ${TWAP_PARTS} parts (funded just-in-time).
@@ -101,16 +125,29 @@ The EOA keeps the 1 wei of ${twapSellToken.symbol}, which means that the EOA is 
 The order will have the side-effects described above. 
 
 Watch Tower will detect the TWAP and create each part, which will settle and send the proceeds back to the EOA.
-Before each part settles, the hook calls poller.topUp(ctx), pulling exactly that part's sell amount from the EOA into cow-shed.
+Each part carries a pre-hook (baked into the TWAP appData) that calls poller.topUp(id), pulling exactly that part's
+sell amount from the EOA into cow-shed right before it settles. No external keeper is needed.
 `,
   );
 
-  // Generate app data for TWAP order
+  // Generate app data for the TWAP, embedding a pre-hook with the polling
   const metadataApi = new MetadataApi();
+  const topUpCalldata = poller.interface.encodeFunctionData("topUp", [id]);
   const twapAppData = await metadataApi.generateAppDataDoc({
     appCode: APP_CODE,
     environment: "prod",
-    metadata: {},
+    metadata: {
+      hooks: {
+        pre: [
+          // Call: poll.topUp(id)
+          {
+            target: COMPOSABLE_COW_POLLER_ADDRESS,
+            callData: topUpCalldata,
+            gasLimit: TOPUP_HOOK_GAS_LIMIT,
+          },
+        ],
+      },
+    },
   });
   const { appDataContent: twapAppDataContent, appDataHex: twapAppDataHex } =
     await metadataApi.getAppDataInfo(twapAppData);
@@ -150,26 +187,36 @@ Before each part settles, the hook calls poller.topUp(ctx), pulling exactly that
 TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmount)} min.`,
   );
 
-  // Build the TWAP. Owner is cow-shed (the order owner / pull destination); the
-  // bought tokens are sent to the trader. `startTime` defaults to AT_MINING_TIME
-  // (t0 = 0), so `createCalldata` uses `createWithContext` with the
-  // CurrentBlockTimestampFactory, anchoring t0 to the settlement block. This is
-  // what lets the poller's `getTradeableOrder` resolve the live part.
-  const twap = Twap.fromData({
-    receiver: eoaTrader,
-    sellAmount: fullSellAmount,
-    buyAmount: twapBuyAmount,
-    numberOfParts: BigNumber.from(TWAP_PARTS),
-    timeBetweenParts: BigNumber.from(TWAP_TIME_BETWEEN_PARTS),
-    sellToken: twapSellToken.address,
-    buyToken: twapBuyToken.address,
-    appData: twapAppDataHex,
-  });
+  // Build the TWAP
+  const twap = Twap.fromData(
+    {
+      receiver: eoaTrader, // bought tokens are sent to the trader (the EOA)
+      sellAmount: fullSellAmount,
+      buyAmount: twapBuyAmount,
+      numberOfParts: BigNumber.from(TWAP_PARTS),
+      timeBetweenParts: BigNumber.from(TWAP_TIME_BETWEEN_PARTS),
+      sellToken: twapSellToken.address,
+      buyToken: twapBuyToken.address,
+      appData: twapAppDataHex, // appData, including the pre-hook to poll funds
+    },
+    twapSalt, // controlled salt, so the schedule `id` matches the embedded hook
+  );
 
-  // `ctx == ComposableCoW.hash(params) == twap.id` is the key both the cabinet
-  // and the poller schedule are stored under.
+  // `ctx == ComposableCoW.hash(params) == twap.id` is the order's cabinet key.
+  // The poller schedule is keyed by the appData-independent `id` instead.
   const ctx = twap.id;
-  const { handler, staticInput } = twap.leaf;
+  const { handler, salt, staticInput } = twap.leaf;
+
+  // Sanity: the handler/salt must be exactly what we derived `id` from, so the
+  // `topUp(id)` hook baked into the appData resolves to this very schedule.
+  if (
+    handler.toLowerCase() !== TWAP_HANDLER.toLowerCase() ||
+    salt.toLowerCase() !== twapSalt.toLowerCase()
+  ) {
+    throw new Error(
+      `TWAP handler/salt mismatch: handler=${handler} salt=${salt} (expected handler=${TWAP_HANDLER} salt=${twapSalt})`,
+    );
+  }
 
   console.log("TWAP context (ctx):", ctx);
   console.log("TWAP params for creation of order", {
@@ -239,6 +286,7 @@ TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmo
       owner: eoaTrader,
       partiallyFillable: false,
       validFor: 1800,
+      slippageBps: FIRST_ORDER_SLIPPAGE_BPS,
     },
     {
       appData: {
@@ -264,6 +312,15 @@ TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmo
   // Print the quote
   printQuote(quoteResults);
 
+  // Calculate the maximum fee we will pay for the first order
+  const firstOrderMaxFee = BigNumber.from(
+    quoteResults.amountsAndCosts.afterSlippage.sellAmount - 1n, // deduct the 1 wei we get back
+  );
+  const firstOrderMaxFeeFormatted = ethers.utils.formatUnits(
+    firstOrderMaxFee,
+    twapSellToken.decimals,
+  );
+
   // Ask for confirmation before doing anything on-chain
   const confirmed = await confirm(
     `This will:
@@ -277,6 +334,7 @@ TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmo
 🥳 Each part will poll ${partSellAmountFormatted} ${twapSellToken.symbol} from your EOA before filling.
 
 Your EOA will receive: ~${fmt(expectedTwapBuyAmount)} (expected), at least ${fmt(twapBuyAmount)} (min, after ${TWAP_SLIPPAGE_BPS / 100}% slippage) across the ${TWAP_PARTS} parts.
+You will pay at most ${firstOrderMaxFeeFormatted} ${twapSellToken.symbol} for placing and setting up the TWAP.
 
 ok?`,
   );
@@ -291,9 +349,7 @@ ok?`,
     token: twapSellToken,
     owner: eoaTrader,
     spender: COW_VAULT_RELAYER_CONTRACT,
-    requiredAmount: BigNumber.from(
-      quoteResults.amountsAndCosts.afterSlippage.sellAmount,
-    ),
+    requiredAmount: firstOrderMaxFee,
     label: "Vault Relayer",
   });
 
@@ -310,21 +366,18 @@ ok?`,
   // 3. Register the JIT funding schedule (only the funder may register).
   // NOTE: We could make the poller registration also accept a signature.
   // This way, this part can always be chained as part of the first-order post-hook and we don't need this transaction
-  const poller = getComposableCowPollerContract(
-    COMPOSABLE_COW_POLLER_ADDRESS,
-    wallet,
-  );
-  const existing = await poller.schedules(ctx);
+  const existing = await poller.schedules(id);
   if (existing.funder !== ethers.constants.AddressZero) {
     console.log(
-      `Schedule already registered for ctx ${ctx} (funder: ${existing.funder}). Skipping register.`,
+      `Schedule already registered for id ${id} (funder: ${existing.funder}). Skipping register.`,
     );
   } else {
     console.log("Registering JIT funding schedule on the poller...");
-    const registerTx = await poller.register(ctx, {
+    const registerTx = await poller.register({
       handler,
       funder: eoaTrader,
       owner: cowShed,
+      salt,
       staticInput,
     });
     console.log("Register tx:", getExplorerUrl(CHAIN_ID, registerTx.hash));

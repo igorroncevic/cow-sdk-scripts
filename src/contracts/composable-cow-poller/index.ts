@@ -12,11 +12,12 @@ import { ethers } from "ethers";
  */
 const COMPOSABLE_COW_POLLER_ABI = [
   "function composableCow() external view returns (address)",
-  "function register(bytes32 ctx, (address handler, address funder, address owner, bytes staticInput) schedule) external",
-  "function revoke(bytes32 ctx) external",
-  "function topUp(bytes32 ctx) external",
-  "function schedules(bytes32 ctx) external view returns (address handler, address funder, address owner, bytes staticInput)",
-  "function lastFunded(bytes32 ctx) external view returns (bytes32)",
+  "function scheduleId(address funder, address handler, address owner, bytes32 salt) external pure returns (bytes32)",
+  "function register((address handler, address funder, address owner, bytes32 salt, bytes staticInput) schedule) external returns (bytes32 id)",
+  "function revoke(bytes32 id) external",
+  "function topUp(bytes32 id) external",
+  "function schedules(bytes32 id) external view returns (address handler, address funder, address owner, bytes32 salt, bytes staticInput)",
+  "function lastFunded(bytes32 id) external view returns (bytes32)",
 ] as const;
 
 export interface PollerSchedule {
@@ -26,6 +27,8 @@ export interface PollerSchedule {
   funder: string;
   /** Order owner (cow-shed / Safe); the fixed pull destination. */
   owner: string;
+  /** The conditional order's `salt`; lets the poller rebuild `ctx` on-chain. */
+  salt: string;
   /** The order's `staticInput`, passed verbatim to `getTradeableOrder`. */
   staticInput: string;
 }
