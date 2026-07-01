@@ -4,13 +4,15 @@ import {
   SupportedChainId,
   OrderKind,
   TradingSdk,
-  Twap,
   COMPOSABLE_COW_CONTRACT_ADDRESS,
   OrderBookApi,
 } from "@cowprotocol/cow-sdk";
+import { Twap } from "@cowprotocol/sdk-composable";
+import { setGlobalAdapter } from "@cowprotocol/sdk-common";
+import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 
 import { MetadataApi } from "@cowprotocol/app-data";
-import { BigNumber, ethers } from "ethers";
+import { ethers } from "ethers";
 import { confirm, debugStringify, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { getCowShedSdk } from "./cowShed";
@@ -41,12 +43,21 @@ export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const eoaTrader = wallet.address as `0x${string}`;
 
+  // v9 SDK uses a global provider adapter (read by the composable order types and
+  // cow-shed via `getGlobalAdapter()`), so set it before using them.
+  const adapter = new EthersV5Adapter({ provider: wallet.provider, signer: wallet });
+  setGlobalAdapter(adapter);
+
   // Initialize the SDK with the wallet
-  const sdk = new TradingSdk({
-    chainId: CHAIN_ID,
-    signer: wallet, // Use a signer
-    appCode: APP_CODE,
-  });
+  const sdk = new TradingSdk(
+    {
+      chainId: CHAIN_ID,
+      signer: wallet, // Use a signer
+      appCode: APP_CODE,
+    },
+    {},
+    adapter,
+  );
 
   // Get some info about the assets
   const { beforeTwapSellToken, twapSellToken, twapBuyToken } =
@@ -58,7 +69,7 @@ export async function run() {
     twapSellToken.decimals,
   );
 
-  const cowShedSdk = getCowShedSdk();
+  const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, eoaTrader);
   console.log("CowShed account:", cowShed);
 
@@ -88,10 +99,10 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
   const twap = Twap.fromData({
     // The TWAP orders sends the bought tokens to the trader
     receiver: eoaTrader,
-    sellAmount: sellAmount,
-    buyAmount: BigNumber.from(PARTS), // TODO: Get another quote and apply a good slippage
-    numberOfParts: BigNumber.from(PARTS),
-    timeBetweenParts: BigNumber.from(300),
+    sellAmount: sellAmount.toBigInt(),
+    buyAmount: BigInt(PARTS), // TODO: Get another quote and apply a good slippage
+    numberOfParts: BigInt(PARTS),
+    timeBetweenParts: 300n,
     sellToken: twapSellToken.address,
     buyToken: twapBuyToken.address,
     appData: twapAppDataHex,

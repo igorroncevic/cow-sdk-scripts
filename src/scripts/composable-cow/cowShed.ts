@@ -1,4 +1,5 @@
-import { CowShedSdk } from "@cowprotocol/cow-sdk";
+import { CowShedSdk } from "@cowprotocol/sdk-cow-shed";
+import { AbstractProviderAdapter } from "@cowprotocol/sdk-common";
 
 // Factory options for the COWShedForComposableCoW deployment on Gnosis Chain.
 // See https://gnosisscan.io/address/0x4f4350bf2c74aacd508d598a1ba94ef84378793d#readContract
@@ -15,6 +16,6 @@ const COW_SHED_FACTORY_OPTIONS = {
  * Build a `CowShedSdk` configured for the COWShedForComposableCoW deployment,
  * which is the cow-shed flavour with support for Composable CoW.
  */
-export function getCowShedSdk(): CowShedSdk {
-  return new CowShedSdk({ factoryOptions: { ...COW_SHED_FACTORY_OPTIONS } });
+export function getCowShedSdk(adapter: AbstractProviderAdapter): CowShedSdk {
+  return new CowShedSdk(adapter, { ...COW_SHED_FACTORY_OPTIONS });
 }

@@ -5,10 +5,12 @@ import {
   SupportedChainId,
   OrderKind,
   TradingSdk,
-  Twap,
   COMPOSABLE_COW_CONTRACT_ADDRESS,
   OrderBookApi,
 } from "@cowprotocol/cow-sdk";
+import { Twap } from "@cowprotocol/sdk-composable";
+import { setGlobalAdapter } from "@cowprotocol/sdk-common";
+import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 
 import { MetadataApi } from "@cowprotocol/app-data";
 import { BigNumber, ethers } from "ethers";
@@ -53,12 +55,21 @@ export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const eoaTrader = wallet.address as `0x${string}`;
 
+  // v9 SDK uses a global provider adapter. The composable order types and cow-shed
+  // read it via `getGlobalAdapter()`, so it must be set before using them.
+  const adapter = new EthersV5Adapter({ provider: wallet.provider, signer: wallet });
+  setGlobalAdapter(adapter);
+
   // Initialize the SDK with the wallet
-  const sdk = new TradingSdk({
-    chainId: CHAIN_ID,
-    signer: wallet, // Use a signer
-    appCode: APP_CODE,
-  });
+  const sdk = new TradingSdk(
+    {
+      chainId: CHAIN_ID,
+      signer: wallet, // Use a signer
+      appCode: APP_CODE,
+    },
+    {},
+    adapter,
+  );
 
   // Get some info about the assets
   const { twapSellToken, twapBuyToken } = await getAssetsInfo({ wallet });
@@ -86,7 +97,7 @@ export async function run() {
     twapSellToken.decimals,
   );
 
-  const cowShedSdk = getCowShedSdk();
+  const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, eoaTrader);
   console.log("CowShed account:", cowShed);
 
@@ -191,10 +202,10 @@ TWAP buy amount total: ~${fmt(expectedTwapBuyAmount)} expected, ${fmt(twapBuyAmo
   const twap = Twap.fromData(
     {
       receiver: eoaTrader, // bought tokens are sent to the trader (the EOA)
-      sellAmount: fullSellAmount,
-      buyAmount: twapBuyAmount,
-      numberOfParts: BigNumber.from(TWAP_PARTS),
-      timeBetweenParts: BigNumber.from(TWAP_TIME_BETWEEN_PARTS),
+      sellAmount: fullSellAmount.toBigInt(),
+      buyAmount: twapBuyAmount.toBigInt(),
+      numberOfParts: BigInt(TWAP_PARTS),
+      timeBetweenParts: BigInt(TWAP_TIME_BETWEEN_PARTS),
       sellToken: twapSellToken.address,
       buyToken: twapBuyToken.address,
       appData: twapAppDataHex, // appData, including the pre-hook to poll funds
