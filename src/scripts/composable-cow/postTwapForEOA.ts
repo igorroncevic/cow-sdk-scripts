@@ -4,16 +4,18 @@ import {
   SupportedChainId,
   OrderKind,
   TradingSdk,
-  Twap,
-  CowShedSdk,
   COMPOSABLE_COW_CONTRACT_ADDRESS,
   OrderBookApi,
 } from "@cowprotocol/cow-sdk";
+import { Twap } from "@cowprotocol/sdk-composable";
+import { setGlobalAdapter } from "@cowprotocol/sdk-common";
+import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 
 import { MetadataApi } from "@cowprotocol/app-data";
-import { BigNumber, ethers } from "ethers";
+import { ethers } from "ethers";
 import { confirm, debugStringify, getWallet, printQuote } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
+import { getCowShedSdk } from "./cowShed";
 // import { latest } from "@cowprotocol/app-data";
 
 const DEFAULT_GAS_LIMIT = 500_000n;
@@ -41,31 +43,33 @@ export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const eoaTrader = wallet.address as `0x${string}`;
 
+  // v9 SDK uses a global provider adapter (read by the composable order types and
+  // cow-shed via `getGlobalAdapter()`), so set it before using them.
+  const adapter = new EthersV5Adapter({ provider: wallet.provider, signer: wallet });
+  setGlobalAdapter(adapter);
+
   // Initialize the SDK with the wallet
-  const sdk = new TradingSdk({
-    chainId: CHAIN_ID,
-    signer: wallet, // Use a signer
-    appCode: APP_CODE,
-  });
+  const sdk = new TradingSdk(
+    {
+      chainId: CHAIN_ID,
+      signer: wallet, // Use a signer
+      appCode: APP_CODE,
+    },
+    {},
+    adapter,
+  );
 
   // Get some info about the assets
   const { beforeTwapSellToken, twapSellToken, twapBuyToken } =
     await getAssetsInfo({ wallet, trader: eoaTrader });
 
-  const sellAmount = ethers.utils.parseUnits("0.2", twapSellToken.decimals); // 0.1 EURe
+  const sellAmount = ethers.utils.parseUnits("0.2", twapSellToken.decimals); // 0.1 sDAI
   const sellAmountFormatted = ethers.utils.formatUnits(
     sellAmount,
-    twapSellToken.decimals
+    twapSellToken.decimals,
   );
 
-  const cowShedSdk = new CowShedSdk({
-    factoryOptions: {
-      factoryAddress: "0x4f4350bf2c74aacd508d598a1ba94ef84378793d",
-      implementationAddress: "0x6773d5aA31A1EAD34127D564D6E258E66254EbDb",
-      proxyCreationCode:
-        "0x60a03461009557601f61033d38819003918201601f19168301916001600160401b0383118484101761009957808492604094855283398101031261009557610052602061004b836100ad565b92016100ad565b6080527f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc5560405161027b90816100c28239608051818181608b01526101750152f35b5f80fd5b634e487b7160e01b5f52604160045260245ffd5b51906001600160a01b03821682036100955756fe60806040526004361015610018575b3661019757610197565b5f3560e01c8063025b22bc146100375763f851a4400361000e57610116565b346101125760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101125760043573ffffffffffffffffffffffffffffffffffffffff81169081810361011257337f000000000000000000000000000000000000000000000000000000000000000073ffffffffffffffffffffffffffffffffffffffff160361010d577f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc557fbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b5f80a2005b61023d565b5f80fd5b34610112575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261011257602061014e61016c565b73ffffffffffffffffffffffffffffffffffffffff60405191168152f35b33300361010d577f000000000000000000000000000000000000000000000000000000000000000090565b60ff7f68df44b1011761f481358c0f49a711192727fb02c377d697bcb0ea8ff8393ac0541615806101f0575b1561023d577ff92ee8a9000000000000000000000000000000000000000000000000000000005f5260045ffd5b507fc4d66de8000000000000000000000000000000000000000000000000000000007fffffffff000000000000000000000000000000000000000000000000000000005f351614156101c3565b5f807f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc54368280378136915af43d5f803e15610277573d5ff35b3d5ffd",
-    },
-  });
+  const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, eoaTrader);
   console.log("CowShed account:", cowShed);
 
@@ -74,7 +78,7 @@ export async function run() {
     `TWAP sell ${sellAmountFormatted} ${twapSellToken.symbol} for ${twapBuyToken.symbol} in ${PARTS} parts.
 To create the TWAP we we will use for this PoC an intermediate order with a post hook:
   - Buy ${sellAmountFormatted} ${twapSellToken.symbol} with ${beforeTwapSellToken.symbol}, sent to ${cowShed}
-  - Post-hook will create the TWAP using cow-shed. Each part sells ${twapSellToken.symbol} for ${twapBuyToken.symbol}`
+  - Post-hook will create the TWAP using cow-shed. Each part sells ${twapSellToken.symbol} for ${twapBuyToken.symbol}`,
   );
 
   // Generate app data for TWAP order
@@ -95,10 +99,10 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
   const twap = Twap.fromData({
     // The TWAP orders sends the bought tokens to the trader
     receiver: eoaTrader,
-    sellAmount: sellAmount,
-    buyAmount: BigNumber.from(PARTS), // TODO: Get another quote and apply a good slippage
-    numberOfParts: BigNumber.from(PARTS),
-    timeBetweenParts: BigNumber.from(300),
+    sellAmount: sellAmount.toBigInt(),
+    buyAmount: BigInt(PARTS), // TODO: Get another quote and apply a good slippage
+    numberOfParts: BigInt(PARTS),
+    timeBetweenParts: 300n,
     sellToken: twapSellToken.address,
     buyToken: twapBuyToken.address,
     appData: twapAppDataHex,
@@ -125,16 +129,16 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
   const approveSellTokenGasLimit =
     await twapSellToken.contract.estimateGas.approve(
       COW_VAULT_RELAYER_CONTRACT,
-      sellAmount
+      sellAmount,
     );
   console.log(
     "Approve sell token gas limit:",
-    approveSellTokenGasLimit.toString()
+    approveSellTokenGasLimit.toString(),
   );
 
   const deadline = BigInt(Math.ceil(Date.now() / 1000)) + 1800n;
   console.log(
-    `Deadline: ${deadline} (${new Date(Number(deadline) * 1000).toISOString()})`
+    `Deadline: ${deadline} (${new Date(Number(deadline) * 1000).toISOString()})`,
   );
 
   const { signedMulticall: approveAndTwap, gasLimit: approveAndTwapGasLimit } =
@@ -195,7 +199,7 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
           },
         },
       },
-    }
+    },
   );
 
   // Print the quote
@@ -204,29 +208,29 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
     quoteResults.amountsAndCosts.afterSlippage.sellAmount;
   const sellAmountIntialTradeFormatted = ethers.utils.formatUnits(
     sellAmountIntialTrade,
-    beforeTwapSellToken.decimals
+    beforeTwapSellToken.decimals,
   );
 
   // Ask for confirmation before posting the order
   const confirmed = await confirm(
-    `Your CoW Shed will get exactly ${sellAmountFormatted} ${twapSellToken.symbol} for at most ${sellAmountIntialTradeFormatted} ${beforeTwapSellToken.symbol}. Then a TWAP will be created with each part selling ${twapSellToken.symbol} for ${twapBuyToken.symbol}. ok?`
+    `Your CoW Shed will get exactly ${sellAmountFormatted} ${twapSellToken.symbol} for at most ${sellAmountIntialTradeFormatted} ${beforeTwapSellToken.symbol}. Then a TWAP will be created with each part selling ${twapSellToken.symbol} for ${twapBuyToken.symbol}. ok?`,
   );
   if (confirmed) {
     const allowance = await beforeTwapSellToken.contract.allowance(
       eoaTrader,
-      COW_VAULT_RELAYER_CONTRACT
+      COW_VAULT_RELAYER_CONTRACT,
     );
     console.log(
-      `Allowance for Vault Relayer: ${allowance} ${beforeTwapSellToken.symbol}`
+      `Allowance for Vault Relayer: ${allowance} ${beforeTwapSellToken.symbol}`,
     );
     if (allowance < sellAmountIntialTrade) {
       console.log(
-        `Approving sell token for: ${sellAmountIntialTradeFormatted} ${beforeTwapSellToken.symbol}`
+        `Approving sell token for: ${sellAmountIntialTradeFormatted} ${beforeTwapSellToken.symbol}`,
       );
 
       const tx = await beforeTwapSellToken.contract.approve(
         COW_VAULT_RELAYER_CONTRACT,
-        ethers.constants.MaxUint256
+        ethers.constants.MaxUint256,
         // sellAmountIntialTrade
       );
       console.log(`Approving ${beforeTwapSellToken.symbol}. tx:`, tx.hash);
@@ -238,7 +242,7 @@ To create the TWAP we we will use for this PoC an intermediate order with a post
     const { orderId } = await postSwapOrderFromQuote();
 
     console.log(
-      `Order created, id: https://explorer.cow.fi/gc/orders/${orderId}?tab=overview`
+      `Order created, id: https://explorer.cow.fi/gc/orders/${orderId}?tab=overview`,
     );
   }
 }
@@ -256,7 +260,7 @@ async function getAssetsInfo(params: {
   // Get ERC20 balance for oldUnderlying using ethersjs
   const beforeTwapSellToken = await getErc20Contract(
     TOKENS.beforeTwapSellToken,
-    wallet
+    wallet,
   );
   const twapSellToken = await getErc20Contract(TOKENS.twapSellToken, wallet);
   const twapBuyToken = await getErc20Contract(TOKENS.twapBuyToken, wallet);
