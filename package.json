@@ -7,19 +7,21 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "watch": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts"
+    "watch": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts",
+    "postinstall": "patch-package"
   },
   "devDependencies": {
     "@types/inquirer": "^9.0.7",
     "@types/node": "^22.10.5",
     "nodemon": "^3.1.9",
+    "patch-package": "^8.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   },
   "dependencies": {
-    "@cowprotocol/cow-sdk": "6.0.0-RC.42",
     "@cowprotocol/app-data": "3.0.0-rc.1",
     "@cowprotocol/contracts": "^1.7.0",
+    "@cowprotocol/cow-sdk": "6.0.0-RC.42",
     "axios": "^1.7.9",
     "dotenv": "^16.4.5",
     "ethers": "^5.7.2",

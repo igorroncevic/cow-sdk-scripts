@@ -77,6 +77,56 @@ export const jsonReplacer = (key: string, value: any) => {
   return value;
 };
 
+/**
+ * Recursively converts BigNumber instances to strings for debugging purposes
+ * @param obj - The object to process
+ * @returns A new object with BigNumbers converted to strings
+ */
+export function debugStringify(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  // Handle BigNumber instances
+  if (obj?._isBigNumber) {
+    return obj.toString();
+  }
+
+  // Handle BigInt
+  if (typeof obj === "bigint") {
+    return obj.toString();
+  }
+
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    return obj.map(debugStringify);
+  }
+
+  // Handle objects (but not functions, dates, etc.)
+  if (typeof obj === "object" && obj.constructor === Object) {
+    const result: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = debugStringify(value);
+    }
+    return result;
+  }
+
+  // Handle other object types (like class instances)
+  if (typeof obj === "object" && obj.constructor !== Object) {
+    try {
+      // Try to convert to plain object first
+      const plainObj = JSON.parse(JSON.stringify(obj, jsonReplacer));
+      return debugStringify(plainObj);
+    } catch {
+      // If that fails, return the string representation
+      return obj.toString();
+    }
+  }
+
+  // Return primitive values as-is
+  return obj;
+}
+
 export function printQuote(quoteResults: QuoteResults) {
   console.log(`\n📉 Suggested slippage: ${quoteResults.suggestedSlippageBps}`);
 
