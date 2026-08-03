@@ -52,6 +52,12 @@ export function getPk() {
   return pk;
 }
 
+export function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
 export async function confirm(message: string): Promise<boolean> {
   const { confirmed } = await inquirer.prompt([
     {

@@ -5,22 +5,30 @@ import {
   TradingSdk,
 } from "@cowprotocol/cow-sdk";
 import { setGlobalAdapter } from "@cowprotocol/sdk-common";
-import {
-  ComposableCowPollerAbi,
-  encodeRevokeWithSignature,
-  getRevokeTypedData,
-  Twap,
-} from "@cowprotocol/sdk-composable";
+import { Twap } from "@cowprotocol/sdk-composable";
 import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 import { BigNumber, ethers } from "ethers";
 
 import { APP_CODE, COW_VAULT_RELAYER_CONTRACT } from "../../const";
+import { getComposableCowPollerContract } from "../../contracts/composable-cow-poller";
 import { getErc20Contract } from "../../contracts/erc20";
-import { confirm, getRpcProvider, getWallet } from "../../utils";
+import { confirm, getRpcProvider, getWallet, requiredEnv } from "../../utils";
 import { getCowShedSdk } from "./cowShed";
+import { optionalPermitCall, permitValueForDebit } from "./optionalPermit";
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 const SDAI = "0xaf204776c7245bF4147c2612BF6e5972Ee483701";
+const COMPOSABLE_COW_INTERFACE = new ethers.utils.Interface([
+  "function remove(bytes32)",
+]);
+const REVOKE_TYPES = {
+  Revoke: [
+    { name: "id", type: "bytes32" },
+    { name: "funder", type: "address" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+};
 const PERMIT_TYPES = {
   Permit: [
     { name: "owner", type: "address" },
@@ -55,6 +63,7 @@ export async function run(): Promise<void> {
     requiredEnv("COMPOSABLE_COW_POLLER_ADDRESS"),
   );
   const scheduleId = requiredBytes32("SCHEDULE_ID");
+  const parentTwapId = requiredBytes32("PARENT_TWAP_ID");
   const wallet = await getWallet(CHAIN_ID);
   if (wallet.address.toLowerCase() !== funder.toLowerCase()) {
     throw new Error("PRIVATE_KEY does not match FUNDER_ADDRESS");
@@ -64,29 +73,36 @@ export async function run(): Promise<void> {
   setGlobalAdapter(adapter);
   const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
-  const poller = new ethers.Contract(
-    pollerAddress,
-    ComposableCowPollerAbi,
-    provider,
-  );
+  const poller = getComposableCowPollerContract(pollerAddress, provider);
   const token = getErc20Contract(SDAI, new ethers.VoidSigner(funder, provider));
-  const schedule = await poller.schedules(scheduleId);
-  if (schedule.funder === ethers.constants.AddressZero) {
-    throw new Error(`No Poller schedule exists for ${scheduleId}`);
+  const [schedule, composableCow] = await Promise.all([
+    poller.schedules(scheduleId),
+    poller.COMPOSABLE_COW(),
+  ]);
+  if (
+    ethers.utils.getAddress(composableCow) !==
+    ethers.utils.getAddress(COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID])
+  ) {
+    throw new Error(
+      "Poller is configured for a different ComposableCoW contract",
+    );
   }
-  if (ethers.utils.getAddress(schedule.funder) !== funder) {
-    throw new Error("The configured funder does not own the Poller schedule");
+  if (schedule.funder !== ethers.constants.AddressZero) {
+    if (ethers.utils.getAddress(schedule.funder) !== funder) {
+      throw new Error("The configured funder does not own the Poller schedule");
+    }
+    if (ethers.utils.getAddress(schedule.owner) !== cowShed) {
+      throw new Error("The Poller schedule is not owned by the funder's CowShed");
+    }
+    const expectedParentTwapId = Twap.fromParams({
+      handler: schedule.handler,
+      salt: schedule.salt,
+      staticInput: schedule.staticInput,
+    }).id;
+    if (parentTwapId.toLowerCase() !== expectedParentTwapId.toLowerCase()) {
+      throw new Error("PARENT_TWAP_ID does not match the Poller schedule");
+    }
   }
-  if (ethers.utils.getAddress(schedule.owner) !== cowShed) {
-    throw new Error("The Poller schedule is not owned by the funder's CowShed");
-  }
-
-  const parentTwap = Twap.fromParams({
-    handler: schedule.handler,
-    salt: schedule.salt,
-    staticInput: schedule.staticInput,
-  });
-  const parentTwapId = parentTwap.id;
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 1800);
 
   console.log({
@@ -116,25 +132,37 @@ export async function run(): Promise<void> {
     token.decimals(),
     token.allowance(funder, COW_VAULT_RELAYER_CONTRACT),
   ]);
+  const assertRevokeReplaySafe = async () => {
+    if ((await poller.nonces(funder)).eq(pollerNonce)) return;
+    if (
+      (await poller.schedules(scheduleId)).funder ===
+      ethers.constants.AddressZero
+    ) {
+      console.warn(
+        "Poller revocation already executed; continuing idempotently.",
+      );
+      return;
+    }
+    throw new Error(
+      "Poller nonce changed before submission; rebuild and re-sign the revoke",
+    );
+  };
 
   // Required signature 1/3: the EOA signs the Poller action. The CowShed submits it later,
   // so calling `revoke` directly would fail the Poller's funder check.
   console.log("Required signature 1/3: Poller revoke authorization");
-  const revokeTypedData = getRevokeTypedData({
-    chainId: CHAIN_ID,
-    pollerAddress,
-    id: scheduleId,
-    funder,
-    nonce: pollerNonce.toBigInt(),
-    deadline,
-  });
   const revokeSignature = await wallet._signTypedData(
-    revokeTypedData.domain,
-    revokeTypedData.types,
-    revokeTypedData.message,
+    {
+      name: "ComposableCowPoller",
+      version: "1",
+      chainId: CHAIN_ID,
+      verifyingContract: pollerAddress,
+    },
+    REVOKE_TYPES,
+    { id: scheduleId, funder, nonce: pollerNonce, deadline },
   );
-  // Required signature 2/3: CowShed authorizes exactly two calls, in order: revoke the
-  // Poller schedule, then remove the parent TWAP authorization from ComposableCoW.
+  // Required signature 2/3: CowShed revokes the Poller schedule and removes the
+  // parent TWAP authorization.
   console.log("Required signature 2/3: CowShed revoke bundle");
   const call = (target: string, callData: string) => ({
     target,
@@ -148,9 +176,16 @@ export async function run(): Promise<void> {
     calls: [
       call(
         pollerAddress,
-        encodeRevokeWithSignature(scheduleId, deadline, revokeSignature),
+        poller.interface.encodeFunctionData("revokeWithSignature", [
+          scheduleId,
+          deadline,
+          revokeSignature,
+        ]),
       ),
-      call(COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID], parentTwap.removeCalldata),
+      call(
+        COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID],
+        COMPOSABLE_COW_INTERFACE.encodeFunctionData("remove", [parentTwapId]),
+      ),
     ],
     deadline,
     signer: wallet,
@@ -187,31 +222,36 @@ export async function run(): Promise<void> {
       signed.r,
       signed.s,
     ]);
-  const revokeOrderAppData = (signedPermit?: SignedPermit) => ({
-    appCode: APP_CODE,
-    metadata: {
-      hooks: {
-        ...(signedPermit
-          ? {
-              pre: [
-                {
-                  target: SDAI,
-                  callData: permitCalldata(signedPermit),
-                  gasLimit: "100000",
-                },
-              ],
-            }
-          : {}),
-        post: [
-          {
-            target: bundle.signedMulticall.to,
-            callData: bundle.signedMulticall.data,
-            gasLimit: bundle.gasLimit.toString(),
-          },
-        ],
+  const revokeOrderAppData = (signedPermit?: SignedPermit) => {
+    const optionalPermit = signedPermit
+      ? optionalPermitCall(SDAI, permitCalldata(signedPermit))
+      : undefined;
+    return {
+      appCode: APP_CODE,
+      metadata: {
+        hooks: {
+          ...(optionalPermit
+            ? {
+                pre: [
+                  {
+                    target: optionalPermit.target,
+                    callData: optionalPermit.callData,
+                    gasLimit: "150000",
+                  },
+                ],
+              }
+            : {}),
+          post: [
+            {
+              target: bundle.signedMulticall.to,
+              callData: bundle.signedMulticall.data,
+              gasLimit: bundle.gasLimit.toString(),
+            },
+          ],
+        },
       },
-    },
-  });
+    };
+  };
   const trade = {
     kind: OrderKind.SELL,
     sellToken: SDAI,
@@ -229,57 +269,72 @@ export async function run(): Promise<void> {
     {},
     adapter,
   );
-  if (!(await poller.nonces(funder)).eq(pollerNonce)) {
-    throw new Error(
-      "Poller nonce changed before quote publication; rebuild and re-sign the revoke",
-    );
-  }
+  await assertRevokeReplaySafe();
   // Quote without a permit first. This avoids asking for an unnecessary fourth
   // signature when the EOA's existing Vault Relayer allowance covers the debit.
-  const {
-    quoteResults: draftQuote,
-    postSwapOrderFromQuote: postDraftOrder,
-  } = await sdk.getQuote(trade, {
-    quoteRequest: { validTo },
-    appData: revokeOrderAppData(),
-  });
-  const debit = BigNumber.from(draftQuote.orderToSign.sellAmount).add(
+  const { quoteResults: draftQuote, postSwapOrderFromQuote: postDraftOrder } =
+    await sdk.getQuote(trade, {
+      quoteRequest: { validTo },
+      appData: revokeOrderAppData(),
+    });
+  const hookFreeDebit = BigNumber.from(draftQuote.orderToSign.sellAmount).add(
     draftQuote.orderToSign.feeAmount,
   );
   let postSwapOrderFromQuote = postDraftOrder;
-  if (currentAllowance.lt(debit)) {
+  const needsPermit = currentAllowance.lt(hookFreeDebit);
+  if (needsPermit) {
     const [tokenName, tokenNonce] = await Promise.all([
       token.name(),
       token.nonces(funder),
     ]);
-    const permitMessage = {
+    const permitMessage = (value: BigNumber) => ({
       owner: funder,
       spender: COW_VAULT_RELAYER_CONTRACT,
-      value: currentAllowance.add(debit).toString(),
+      value: value.toString(),
       nonce: tokenNonce.toString(),
       deadline: deadline.toString(),
-    };
+    });
     const permitDomain = {
       name: tokenName,
       version: process.env.SDAI_PERMIT_VERSION ?? "1",
       chainId: CHAIN_ID,
       verifyingContract: SDAI,
     };
-    // Optional signature 3/4: increase the Vault Relayer allowance by the exact
-    // debit from the draft quote. Existing allowance is preserved in the permit value.
+    const placeholderPermit = {
+      ...permitMessage(BigNumber.from(0)),
+      v: 0,
+      r: ethers.constants.HashZero,
+      s: ethers.constants.HashZero,
+    };
+    const placeholderQuote = await sdk.getQuote(trade, {
+      quoteRequest: { validTo },
+      appData: revokeOrderAppData(placeholderPermit),
+    });
+    const permitDebit = BigNumber.from(
+      placeholderQuote.quoteResults.orderToSign.sellAmount,
+    ).add(placeholderQuote.quoteResults.orderToSign.feeAmount);
+    const permitValue = permitValueForDebit(currentAllowance, permitDebit);
+    // Optional signature 3/4: authorize the permit-bearing quote's exact debit.
     console.log("Optional signature 3/4: revoke-order permit");
+    const message = permitMessage(permitValue);
     const permitSignature = ethers.utils.splitSignature(
-      await wallet._signTypedData(permitDomain, PERMIT_TYPES, permitMessage),
+      await wallet._signTypedData(permitDomain, PERMIT_TYPES, message),
     );
-    const signedPermit = { ...permitMessage, ...permitSignature };
+    const signedPermit = { ...message, ...permitSignature };
     // Rebuild with the permit hook. All economic fields must remain unchanged.
     const final = await sdk.getQuote(trade, {
       quoteRequest: { validTo },
       appData: revokeOrderAppData(signedPermit),
     });
     if (
-      JSON.stringify({ ...final.quoteResults.orderToSign, appData: undefined }) !==
-      JSON.stringify({ ...draftQuote.orderToSign, appData: undefined })
+      JSON.stringify({
+        ...final.quoteResults.orderToSign,
+        appData: undefined,
+      }) !==
+      JSON.stringify({
+        ...placeholderQuote.quoteResults.orderToSign,
+        appData: undefined,
+      })
     ) {
       throw new Error("Final revoke quote differs from the permit draft");
     }
@@ -289,27 +344,20 @@ export async function run(): Promise<void> {
       "Existing Vault Relayer allowance covers the revoke order; skipping permit signature.",
     );
   }
-  if (!(await poller.nonces(funder)).eq(pollerNonce)) {
-    throw new Error(
-      "Poller nonce changed after quoting; rebuild and re-sign the revoke",
-    );
-  }
+  await assertRevokeReplaySafe();
 
   // Required signature 3/3 (or signature 4/4 after a permit): authorize the final
   // CoW order, including the CowShed revoke bundle in its post-hook.
   console.log(
-    currentAllowance.lt(debit)
+    needsPermit
       ? "Signature 4/4: hook-aware revoke order"
       : "Required signature 3/3: hook-aware revoke order",
   );
   const { orderId } = await postSwapOrderFromQuote();
   console.log(`Submitted: https://explorer.cow.fi/gc/orders/${orderId}`);
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required`);
-  return value;
+  console.warn(
+    "Submission is not fulfillment. After settlement, clear the EOA's Poller allowance and withdraw any remaining sDAI from CowShed.",
+  );
 }
 
 function requiredBytes32(name: string): string {

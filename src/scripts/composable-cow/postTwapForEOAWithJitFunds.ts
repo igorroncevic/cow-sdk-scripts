@@ -1,7 +1,4 @@
 import { APP_CODE, COW_VAULT_RELAYER_CONTRACT } from "../../const";
-import {
-  COMPOSABLE_COW_POLLER_ADDRESS as DEFAULT_COMPOSABLE_COW_POLLER_ADDRESS,
-} from "../../const/gnosis";
 
 import {
   SupportedChainId,
@@ -22,6 +19,7 @@ import {
   getExplorerUrl,
   getWallet,
   printQuote,
+  requiredEnv,
 } from "../../utils";
 import { getErc20Contract } from "../../contracts/erc20";
 import { getComposableCowPollerContract } from "../../contracts/composable-cow-poller";
@@ -57,13 +55,15 @@ export async function run() {
   const wallet = await getWallet(CHAIN_ID);
   const eoaTrader = wallet.address as `0x${string}`;
   const pollerAddress = ethers.utils.getAddress(
-    process.env.COMPOSABLE_COW_POLLER_ADDRESS ??
-      DEFAULT_COMPOSABLE_COW_POLLER_ADDRESS,
+    requiredEnv("COMPOSABLE_COW_POLLER_ADDRESS"),
   );
 
   // v9 SDK uses a global provider adapter. The composable order types and cow-shed
   // read it via `getGlobalAdapter()`, so it must be set before using them.
-  const adapter = new EthersV5Adapter({ provider: wallet.provider, signer: wallet });
+  const adapter = new EthersV5Adapter({
+    provider: wallet.provider,
+    signer: wallet,
+  });
   setGlobalAdapter(adapter);
 
   // Initialize the SDK with the wallet

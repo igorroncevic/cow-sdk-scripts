@@ -1,25 +1,16 @@
 import { ethers } from "ethers";
 
-/**
- * Minimal ABI for the `ComposableCowPoller` contract.
- *
- * It enables just-in-time funding for composable conditional orders: instead of
- * locking the whole notional up front, `pollFunds` pulls exactly the current discrete
- * order's `sellAmount` from a funder into the order owner, immediately before that
- * order settles.
- *
- * @see https://github.com/cowprotocol/composable-cow/pull/116
- */
 const COMPOSABLE_COW_POLLER_ABI = [
   "function COMPOSABLE_COW() external view returns (address)",
-  "function COW_SHED_FACTORY() external view returns (address)",
+  "function nonces(address funder) external view returns (uint256 nonce)",
   "function scheduleId((address handler, address funder, address owner, bytes32 salt, bytes staticInput) schedule) external pure returns (bytes32)",
   "function register((address handler, address funder, address owner, bytes32 salt, bytes staticInput) schedule) external returns (bytes32 id)",
+  "function registerWithSignature((address handler, address funder, address owner, bytes32 salt, bytes staticInput) schedule, uint256 deadline, bytes signature) external returns (bytes32 id)",
   "function revoke(bytes32 id) external",
-  "function pollFunds(bytes32 id) external",
+  "function revokeWithSignature(bytes32 id, uint256 deadline, bytes signature) external",
+  "function pollFunds(bytes32 id) external returns (bool)",
   "function schedules(bytes32 id) external view returns (address handler, address funder, address owner, bytes32 salt, bytes staticInput)",
   "function funded(bytes32 id, bytes32 digest) external view returns (bool)",
-  "event ScheduleRegistered(bytes32 indexed id, address indexed owner, address indexed funder)",
 ] as const;
 
 export interface PollerSchedule {
@@ -37,7 +28,7 @@ export interface PollerSchedule {
 
 export function getComposableCowPollerContract(
   pollerAddress: string,
-  signer?: ethers.Signer | ethers.providers.Provider
+  signer?: ethers.Signer | ethers.providers.Provider,
 ): ethers.Contract {
   return new ethers.Contract(pollerAddress, COMPOSABLE_COW_POLLER_ABI, signer);
 }
