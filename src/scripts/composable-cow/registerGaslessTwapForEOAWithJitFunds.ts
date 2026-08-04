@@ -6,7 +6,7 @@ import {
   SupportedChainId,
   TradingSdk,
 } from "@cowprotocol/cow-sdk";
-import { setGlobalAdapter } from "@cowprotocol/sdk-common";
+import { areAddressesEqual, setGlobalAdapter } from "@cowprotocol/sdk-common";
 import {
   ComposableCowPollerAbi,
   encodePollFunds,
@@ -24,7 +24,9 @@ import { getCowShedSdk } from "./cowShed";
 import {
   getPermitTokenContract,
   optionalPermitCall,
+  PERMIT_TYPES,
   permitValueForDebit,
+  SignedPermit,
 } from "./optionalPermit";
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
@@ -32,15 +34,6 @@ const SDAI = "0xaf204776c7245bF4147c2612BF6e5972Ee483701";
 const COW = "0x177127622c4A00F3d409B75571e12cB3c8973d3c";
 const TWAP_HANDLER = "0x6cF1e9cA41f7611dEf408122793c358a3d11E5a5";
 const TWAP_PARTS = 2;
-const PERMIT_TYPES = {
-  Permit: [
-    { name: "owner", type: "address" },
-    { name: "spender", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "nonce", type: "uint256" },
-    { name: "deadline", type: "uint256" },
-  ],
-};
 
 // Dry-run is the default. --broadcast collects four signatures, plus a Poller
 // permit when needed, and submits one hook-bearing same-token setup order.
@@ -55,7 +48,7 @@ export async function run(): Promise<void> {
   );
 
   const wallet = await getWallet(CHAIN_ID);
-  if (wallet.address.toLowerCase() !== funder.toLowerCase()) {
+  if (!areAddressesEqual(wallet.address, funder)) {
     throw new Error("PRIVATE_KEY does not match FUNDER_ADDRESS");
   }
   const adapter = new EthersV5Adapter({ provider, signer: wallet });
@@ -78,8 +71,7 @@ export async function run(): Promise<void> {
     poller.COMPOSABLE_COW(),
   ]);
   if (
-    ethers.utils.getAddress(composableCow) !==
-    ethers.utils.getAddress(COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID])
+    !areAddressesEqual(composableCow, COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID])
   ) {
     throw new Error(
       "Poller is configured for a different ComposableCoW contract",
@@ -218,11 +210,6 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
     {},
     adapter,
   );
-  type SignedPermit = ReturnType<typeof permit> & {
-    v: number;
-    r: string;
-    s: string;
-  };
   const signPermit = async (
     message: ReturnType<typeof permit>,
     number: number,
@@ -237,17 +224,6 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
     );
     return { ...message, ...ethers.utils.splitSignature(signature) };
   };
-  const permitCalldata = (signed: SignedPermit) =>
-    token.interface.encodeFunctionData("permit", [
-      signed.owner,
-      signed.spender,
-      signed.value,
-      signed.deadline,
-      signed.v,
-      signed.r,
-      signed.s,
-    ]);
-
   // Authorize the CowShed to register this EOA-funded schedule.
   // The Poller consumes the EOA's nonce when the setup bundle executes.
   console.log(
@@ -277,6 +253,9 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   const signedPollerPermit = needsPollerPermit
     ? await signPermit(pollerPermit, 2)
     : undefined;
+  const optionalPollerPermit = signedPollerPermit
+    ? optionalPermitCall(SDAI, signedPollerPermit)
+    : undefined;
   // Authorize the exact CowShed setup calls embedded below.
   const cowShedSignatureNumber = needsPollerPermit ? 3 : 2;
   console.log(
@@ -292,8 +271,8 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   const bundle = await cowShedSdk.signCalls({
     chainId: CHAIN_ID,
     calls: [
-      ...(signedPollerPermit
-        ? [call(SDAI, permitCalldata(signedPollerPermit))]
+      ...(optionalPollerPermit
+        ? [call(optionalPollerPermit.target, optionalPollerPermit.callData)]
         : []),
       call(
         pollerAddress,
@@ -314,20 +293,17 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
     ],
     deadline: BigInt(validTo),
     signer: wallet,
-    defaultGasLimit: 500_000n,
+    defaultGasLimit: 1_000_000n,
   });
   if (
-    ethers.utils.getAddress(bundle.cowShedAccount) !== cowShed ||
+    !areAddressesEqual(bundle.cowShedAccount, cowShed) ||
     bundle.signedMulticall.value !== 0n
   ) {
     throw new Error("CowShed SDK returned an unexpected setup call");
   }
 
   const setupOrderAppData = (signedPermit: SignedPermit) => {
-    const optionalSetupPermit = optionalPermitCall(
-      SDAI,
-      permitCalldata(signedPermit),
-    );
+    const optionalSetupPermit = optionalPermitCall(SDAI, signedPermit);
     return {
       appCode: APP_CODE,
       metadata: {
@@ -364,6 +340,9 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   const setupDebit = BigNumber.from(draftQuote.orderToSign.sellAmount).add(
     draftQuote.orderToSign.feeAmount,
   );
+  if (!setupDebit.eq(setupTrade.amount)) {
+    throw new Error("Setup quote exceeds the requested debit");
+  }
   // Let the Vault Relayer debit the setup order's quoted amount.
   const signedSetupPermit = await signPermit(
     permit(
@@ -389,7 +368,6 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   }
   await assertRegisterNonce();
 
-  // Authorize the hook-aware order that executes the setup bundle.
   console.log(
     `Signature ${signatureCount}/${signatureCount}: hook-aware setup order`,
   );

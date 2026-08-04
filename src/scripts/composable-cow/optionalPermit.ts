@@ -12,6 +12,27 @@ const PERMIT_TOKEN_ABI = [
   "function nonces(address owner) external view returns (uint256)",
   "function permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)",
 ] as const;
+const PERMIT_TOKEN_INTERFACE = new ethers.utils.Interface(PERMIT_TOKEN_ABI);
+
+export const PERMIT_TYPES = {
+  Permit: [
+    { name: "owner", type: "address" },
+    { name: "spender", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+};
+
+export type SignedPermit = {
+  owner: string;
+  spender: string;
+  value: string;
+  deadline: string;
+  v: number;
+  r: string;
+  s: string;
+};
 
 export function getPermitTokenContract(
   token: string,
@@ -20,11 +41,20 @@ export function getPermitTokenContract(
   return new ethers.Contract(token, PERMIT_TOKEN_ABI, signer);
 }
 
-export function optionalPermitCall(token: string, permitCalldata: string) {
+export function optionalPermitCall(token: string, permit: SignedPermit) {
+  const callData = PERMIT_TOKEN_INTERFACE.encodeFunctionData("permit", [
+    permit.owner,
+    permit.spender,
+    permit.value,
+    permit.deadline,
+    permit.v,
+    permit.r,
+    permit.s,
+  ]);
   return {
     target: MULTICALL3,
     callData: MULTICALL3_INTERFACE.encodeFunctionData("aggregate3", [
-      [{ target: token, allowFailure: true, callData: permitCalldata }],
+      [{ target: token, allowFailure: true, callData }],
     ]),
   };
 }
