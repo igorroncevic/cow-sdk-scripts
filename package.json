@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc",
-    "jit-twap:gasless": "ts-node src/scripts/composable-cow/postGaslessTwapForEOAWithJitFunds.ts",
+    "jit-twap:register:gasless": "ts-node src/scripts/composable-cow/registerGaslessTwapForEOAWithJitFunds.ts",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "watch": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts",
