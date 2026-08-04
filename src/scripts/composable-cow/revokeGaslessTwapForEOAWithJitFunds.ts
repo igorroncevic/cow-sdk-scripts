@@ -21,14 +21,12 @@ import {
   getPermitTokenContract,
   optionalPermitCall,
   PERMIT_TYPES,
-  permitValueForDebit,
   SignedPermit,
 } from "./optionalPermit";
 
 const CHAIN_ID = SupportedChainId.GNOSIS_CHAIN;
 const SDAI = "0xaf204776c7245bF4147c2612BF6e5972Ee483701";
 
-// Dry-run is the default. --broadcast signs and submits one hook-bearing revoke order.
 export async function run(): Promise<void> {
   const broadcast = process.argv.includes("--broadcast");
   const provider = await getRpcProvider(CHAIN_ID);
@@ -224,61 +222,52 @@ export async function run(): Promise<void> {
     adapter,
   );
   await assertRevokeReplaySafe();
-  // Quote without a permit first. This avoids asking for an unnecessary fourth
-  // signature when the EOA's existing Vault Relayer allowance covers the debit.
-  const { quoteResults: draftQuote, postSwapOrderFromQuote: postDraftOrder } =
-    await sdk.getQuote(trade, {
-      quoteRequest: { validTo },
-      appData: revokeOrderAppData(),
-    });
-  const draftDebit = BigNumber.from(draftQuote.orderToSign.sellAmount).add(
-    draftQuote.orderToSign.feeAmount,
-  );
-  if (!draftDebit.eq(trade.amount)) {
-    throw new Error("Revoke quote exceeds the requested debit");
-  }
-  let postSwapOrderFromQuote = postDraftOrder;
-  const needsPermit = currentAllowance.lt(draftDebit);
-  if (needsPermit) {
+  const needsPermit = currentAllowance.lt(trade.amount);
+  const createPermitContext = async () => {
     const [tokenName, tokenNonce] = await Promise.all([
       token.name(),
       token.nonces(funder),
     ]);
-    const permitMessage = (value: BigNumber) => ({
+    const message = (value: BigNumber) => ({
       owner: funder,
       spender: COW_VAULT_RELAYER_CONTRACT,
       value: value.toString(),
       nonce: tokenNonce.toString(),
       deadline: deadline.toString(),
     });
-    const permitDomain = {
-      name: tokenName,
-      version: process.env.SDAI_PERMIT_VERSION ?? "1",
-      chainId: CHAIN_ID,
-      verifyingContract: SDAI,
+    return {
+      message,
+      domain: {
+        name: tokenName,
+        version: process.env.SDAI_PERMIT_VERSION ?? "1",
+        chainId: CHAIN_ID,
+        verifyingContract: SDAI,
+      },
+      placeholder: {
+        ...message(ethers.constants.Zero),
+        v: 0,
+        r: ethers.constants.HashZero,
+        s: ethers.constants.HashZero,
+      },
     };
-    const placeholderPermit = {
-      ...permitMessage(ethers.constants.Zero),
-      v: 0,
-      r: ethers.constants.HashZero,
-      s: ethers.constants.HashZero,
-    };
-    const placeholderQuote = await sdk.getQuote(trade, {
-      quoteRequest: { validTo },
-      appData: revokeOrderAppData(placeholderPermit),
-    });
-    const permitDebit = BigNumber.from(
-      placeholderQuote.quoteResults.orderToSign.sellAmount,
-    ).add(placeholderQuote.quoteResults.orderToSign.feeAmount);
-    if (!permitDebit.eq(trade.amount)) {
-      throw new Error("Revoke quote exceeds the requested debit");
-    }
-    const permitValue = permitValueForDebit(currentAllowance, permitDebit);
-    // Optional signature 3/4: authorize the permit-bearing quote's exact debit.
+  };
+  const permitContext = needsPermit ? await createPermitContext() : undefined;
+  const initialQuote = await sdk.getQuote(trade, {
+    quoteRequest: { validTo },
+    appData: revokeOrderAppData(permitContext?.placeholder),
+  });
+  const debit = BigNumber.from(
+    initialQuote.quoteResults.orderToSign.sellAmount,
+  ).add(initialQuote.quoteResults.orderToSign.feeAmount);
+  if (!debit.eq(trade.amount)) {
+    throw new Error("Revoke quote exceeds the requested debit");
+  }
+  let postSwapOrderFromQuote = initialQuote.postSwapOrderFromQuote;
+  if (permitContext) {
     console.log("Optional signature 3/4: revoke-order permit");
-    const message = permitMessage(permitValue);
+    const message = permitContext.message(currentAllowance.add(debit));
     const permitSignature = ethers.utils.splitSignature(
-      await wallet._signTypedData(permitDomain, PERMIT_TYPES, message),
+      await wallet._signTypedData(permitContext.domain, PERMIT_TYPES, message),
     );
     const signedPermit = { ...message, ...permitSignature };
     // Rebuild with the permit hook. All economic fields must remain unchanged.
@@ -292,7 +281,7 @@ export async function run(): Promise<void> {
         appData: undefined,
       }) !==
       JSON.stringify({
-        ...placeholderQuote.quoteResults.orderToSign,
+        ...initialQuote.quoteResults.orderToSign,
         appData: undefined,
       })
     ) {

@@ -38,7 +38,7 @@ export function getPermitTokenContract(
   token: string,
   signer?: ethers.Signer | ethers.providers.Provider,
 ) {
-  return new ethers.Contract(token, PERMIT_TOKEN_ABI, signer);
+  return new ethers.Contract(token, PERMIT_TOKEN_INTERFACE, signer);
 }
 
 export function optionalPermitCall(token: string, permit: SignedPermit) {

@@ -35,8 +35,6 @@ const COW = "0x177127622c4A00F3d409B75571e12cB3c8973d3c";
 const TWAP_HANDLER = "0x6cF1e9cA41f7611dEf408122793c358a3d11E5a5";
 const TWAP_PARTS = 2;
 
-// Dry-run is the default. --broadcast collects four signatures, plus a Poller
-// permit when needed, and submits one hook-bearing same-token setup order.
 export async function run(): Promise<void> {
   const broadcast = process.argv.includes("--broadcast");
   const provider = await getRpcProvider(CHAIN_ID);
@@ -343,7 +341,6 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   if (!setupDebit.eq(setupTrade.amount)) {
     throw new Error("Setup quote exceeds the requested debit");
   }
-  // Let the Vault Relayer debit the setup order's quoted amount.
   const signedSetupPermit = await signPermit(
     permit(
       COW_VAULT_RELAYER_CONTRACT,
