@@ -6,9 +6,8 @@ import {
 } from "@cowprotocol/cow-sdk";
 import { areAddressesEqual, setGlobalAdapter } from "@cowprotocol/sdk-common";
 import {
+  ComposableCowPoller,
   ComposableCowPollerAbi,
-  encodeRevokeWithSignature,
-  getRevokeTypedData,
   Twap,
 } from "@cowprotocol/sdk-composable";
 import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
@@ -45,6 +44,7 @@ export async function run(): Promise<void> {
 
   const adapter = new EthersV5Adapter({ provider, signer: wallet });
   setGlobalAdapter(adapter);
+  const pollerSdk = new ComposableCowPoller(pollerAddress);
   const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
   const poller = new ethers.Contract(
@@ -124,9 +124,8 @@ export async function run(): Promise<void> {
   // Required signature 1/3: the EOA signs the Poller action. The CowShed submits it later,
   // so calling `revoke` directly would fail the Poller's funder check.
   console.log("Required signature 1/3: Poller revoke authorization");
-  const revokeTypedData = getRevokeTypedData({
+  const revokeTypedData = pollerSdk.getRevokeTypedData({
     chainId: CHAIN_ID,
-    pollerAddress,
     id: scheduleId,
     funder,
     nonce: pollerNonce.toBigInt(),
@@ -152,7 +151,7 @@ export async function run(): Promise<void> {
     calls: [
       call(
         pollerAddress,
-        encodeRevokeWithSignature(scheduleId, deadline, revokeSignature),
+        pollerSdk.revokeWithSignature(scheduleId, deadline, revokeSignature),
       ),
       call(
         COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID],

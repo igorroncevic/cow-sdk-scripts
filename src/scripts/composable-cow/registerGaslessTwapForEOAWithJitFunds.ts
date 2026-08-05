@@ -8,11 +8,8 @@ import {
 } from "@cowprotocol/cow-sdk";
 import { areAddressesEqual, setGlobalAdapter } from "@cowprotocol/sdk-common";
 import {
+  ComposableCowPoller,
   ComposableCowPollerAbi,
-  encodePollFunds,
-  encodeRegisterWithSignature,
-  getRegisterTypedData,
-  getScheduleId,
   Twap,
 } from "@cowprotocol/sdk-composable";
 import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
@@ -51,6 +48,7 @@ export async function run(): Promise<void> {
   }
   const adapter = new EthersV5Adapter({ provider, signer: wallet });
   setGlobalAdapter(adapter);
+  const pollerSdk = new ComposableCowPoller(pollerAddress);
 
   const token = getPermitTokenContract(
     SDAI,
@@ -80,7 +78,7 @@ export async function run(): Promise<void> {
   const salt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
   // The ID excludes appData, so pollFunds(id) can be embedded in the TWAP's own
   // appData without creating a circular hash dependency.
-  const scheduleId = getScheduleId({
+  const scheduleId = pollerSdk.scheduleId({
     handler: TWAP_HANDLER,
     funder,
     owner: cowShed,
@@ -96,7 +94,7 @@ export async function run(): Promise<void> {
         pre: [
           {
             target: pollerAddress,
-            callData: encodePollFunds(scheduleId),
+            callData: pollerSdk.pollFunds(scheduleId),
             gasLimit: "350000",
           },
         ],
@@ -235,9 +233,8 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
       );
     }
   };
-  const registerTypedData = getRegisterTypedData({
+  const registerTypedData = pollerSdk.getRegisterTypedData({
     chainId: CHAIN_ID,
-    pollerAddress,
     schedule,
     nonce: pollerNonce.toBigInt(),
     deadline: BigInt(validTo),
@@ -274,7 +271,7 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
         : []),
       call(
         pollerAddress,
-        encodeRegisterWithSignature(
+        pollerSdk.registerWithSignature(
           schedule,
           BigInt(validTo),
           registerSignature,
