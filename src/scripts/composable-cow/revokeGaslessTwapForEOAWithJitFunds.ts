@@ -5,11 +5,7 @@ import {
   TradingSdk,
 } from "@cowprotocol/cow-sdk";
 import { areAddressesEqual, setGlobalAdapter } from "@cowprotocol/sdk-common";
-import {
-  ComposableCowPoller,
-  ComposableCowPollerAbi,
-  Twap,
-} from "@cowprotocol/sdk-composable";
+import { ComposableCowPoller, Twap } from "@cowprotocol/sdk-composable";
 import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 import { BigNumber, ethers } from "ethers";
 
@@ -47,18 +43,13 @@ export async function run(): Promise<void> {
   const pollerSdk = new ComposableCowPoller(pollerAddress);
   const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
-  const poller = new ethers.Contract(
-    pollerAddress,
-    ComposableCowPollerAbi,
-    provider,
-  );
   const token = getPermitTokenContract(
     SDAI,
     new ethers.VoidSigner(funder, provider),
   );
   const [schedule, composableCow] = await Promise.all([
-    poller.schedules(scheduleId),
-    poller.COMPOSABLE_COW(),
+    pollerSdk.schedule(scheduleId),
+    pollerSdk.composableCow(),
   ]);
   if (
     !areAddressesEqual(composableCow, COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID])
@@ -109,12 +100,12 @@ export async function run(): Promise<void> {
   // Snapshot the Poller nonce before signing. Any intervening Poller action invalidates
   // the revoke signature, so the script checks the Poller nonce again before each quote.
   const [pollerNonce, decimals, currentAllowance] = await Promise.all([
-    poller.nonces(funder),
+    pollerSdk.nonce(funder),
     token.decimals(),
     token.allowance(funder, COW_VAULT_RELAYER_CONTRACT),
   ]);
   const assertRevokeReplaySafe = async () => {
-    if (!(await poller.nonces(funder)).eq(pollerNonce)) {
+    if (BigInt(await pollerSdk.nonce(funder)) !== BigInt(pollerNonce)) {
       throw new Error(
         "Poller nonce changed before submission; rebuild and re-sign the revoke",
       );
@@ -128,7 +119,7 @@ export async function run(): Promise<void> {
     chainId: CHAIN_ID,
     id: scheduleId,
     funder,
-    nonce: pollerNonce.toBigInt(),
+    nonce: pollerNonce,
     deadline,
   });
   const revokeSignature = await wallet._signTypedData(

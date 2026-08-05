@@ -7,11 +7,7 @@ import {
   TradingSdk,
 } from "@cowprotocol/cow-sdk";
 import { areAddressesEqual, setGlobalAdapter } from "@cowprotocol/sdk-common";
-import {
-  ComposableCowPoller,
-  ComposableCowPollerAbi,
-  Twap,
-} from "@cowprotocol/sdk-composable";
+import { ComposableCowPoller, Twap } from "@cowprotocol/sdk-composable";
 import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 import { BigNumber, ethers } from "ethers";
 
@@ -56,15 +52,10 @@ export async function run(): Promise<void> {
   );
   const cowShedSdk = getCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
-  const poller = new ethers.Contract(
-    pollerAddress,
-    ComposableCowPollerAbi,
-    provider,
-  );
   const [decimals, currentPollerAllowance, composableCow] = await Promise.all([
     token.decimals(),
     token.allowance(funder, pollerAddress),
-    poller.COMPOSABLE_COW(),
+    pollerSdk.composableCow(),
   ]);
   if (
     !areAddressesEqual(composableCow, COMPOSABLE_COW_CONTRACT_ADDRESS[CHAIN_ID])
@@ -225,9 +216,9 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   console.log(
     `Signature 1/${signatureCount}: Poller registration authorization`,
   );
-  const pollerNonce = await poller.nonces(funder);
+  const pollerNonce = await pollerSdk.nonce(funder);
   const assertRegisterNonce = async () => {
-    if (!(await poller.nonces(funder)).eq(pollerNonce)) {
+    if (BigInt(await pollerSdk.nonce(funder)) !== BigInt(pollerNonce)) {
       throw new Error(
         "Poller nonce changed before submission; rebuild and re-sign the registration",
       );
@@ -236,7 +227,7 @@ After setup settles, each TWAP part calls pollFunds(${scheduleId}) before settle
   const registerTypedData = pollerSdk.getRegisterTypedData({
     chainId: CHAIN_ID,
     schedule,
-    nonce: pollerNonce.toBigInt(),
+    nonce: pollerNonce,
     deadline: BigInt(validTo),
   });
   const registerSignature = await wallet._signTypedData(
