@@ -6,7 +6,7 @@ import {
   TradeParameters,
   TradingSdk,
 } from "@cowprotocol/cow-sdk";
-import { MetadataApi } from "@cowprotocol/sdk-app-data";
+import { AppDataSdk } from "@cowprotocol/sdk-app-data";
 import { ethers } from "ethers";
 import { getWallet, jsonReplacer } from "../../utils";
 
@@ -72,8 +72,8 @@ export async function run() {
     buyTokenDecimals: 18,
   };
 
-  const metadataApi = new MetadataApi();
-  const appData = await metadataApi.generateAppDataDoc({
+  const appDataSdk = new AppDataSdk();
+  const appData = await appDataSdk.generateAppDataDoc({
     appCode: APP_CODE,
     metadata: {
       hooks: HOOKS,
@@ -84,7 +84,7 @@ export async function run() {
   // `@cowprotocol/sdk-app-data` schema vs the copy bundled inside `@cowprotocol/cow-sdk`). The
   // runtime JSON is identical.
   // Inspect exactly what will be committed on-chain (hash) and served off-chain (full doc).
-  const { appDataContent, appDataHex } = await metadataApi.getAppDataInfo(
+  const { appDataContent, appDataHex } = await appDataSdk.getAppDataInfo(
     appData as any,
   );
   console.log("📦 appData doc:", JSON.stringify(appData, jsonReplacer, 2));

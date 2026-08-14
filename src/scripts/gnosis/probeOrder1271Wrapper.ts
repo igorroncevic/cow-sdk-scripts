@@ -53,7 +53,7 @@ async function buildAppData(withWrappers: boolean) {
   const doc = await metadataApi.generateAppDataDoc({
     appCode: APP_CODE,
     metadata: withWrappers
-      ? { wrappers: [{ address: WRAPPER_ADDRESS, data: "0x", is_omittable: false }] }
+      ? { wrappers: [{ address: WRAPPER_ADDRESS, data: "0x", isOmittable: false }] }
       : {},
   });
   const { appDataContent, appDataHex } = await metadataApi.getAppDataInfo(doc);
