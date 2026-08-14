@@ -53,7 +53,11 @@ async function buildAppData(withWrappers: boolean) {
   const doc = await metadataApi.generateAppDataDoc({
     appCode: APP_CODE,
     metadata: withWrappers
-      ? { wrappers: [{ address: WRAPPER_ADDRESS, data: "0x", isOmittable: false }] }
+      ? {
+          wrappers: [
+            { address: WRAPPER_ADDRESS, data: "0x", isOmittable: false },
+          ],
+        }
       : {},
   });
   const { appDataContent, appDataHex } = await metadataApi.getAppDataInfo(doc);
@@ -79,7 +83,9 @@ async function probe(label: string, owner: string, withWrappers: boolean) {
     // Post as a 1271 order: owner is the stub; the signature blob is unused by the stub.
     const orderId = await orderBookApi.sendOrder({
       ...quote,
-      sellAmount: (BigInt(quote.sellAmount) + BigInt(quote.feeAmount)).toString(),
+      sellAmount: (
+        BigInt(quote.sellAmount) + BigInt(quote.feeAmount)
+      ).toString(),
       feeAmount: "0",
       from: owner,
       receiver: owner,
@@ -89,7 +95,9 @@ async function probe(label: string, owner: string, withWrappers: boolean) {
       signature: "0x",
     } as any);
 
-    console.log(`✅ ${label}\n   ACCEPTED -> https://explorer.cow.fi/gc/orders/${orderId}`);
+    console.log(
+      `✅ ${label}\n   ACCEPTED -> https://explorer.cow.fi/gc/orders/${orderId}`,
+    );
   } catch (e: any) {
     const body = e?.body ?? e?.response?.data ?? e?.message;
     console.log(`❌ ${label}\n   REJECTED -> ${JSON.stringify(body)}`);
@@ -100,10 +108,18 @@ export async function run() {
   const wallet = await getWallet(CHAIN);
 
   let stubAddress = process.env.MOCK_1271;
-  const stub = new ethers.Contract(stubAddress ?? ethers.constants.AddressZero, MOCK_1271_ABI, wallet);
+  const stub = new ethers.Contract(
+    stubAddress ?? ethers.constants.AddressZero,
+    MOCK_1271_ABI,
+    wallet,
+  );
   if (!stubAddress) {
     console.log("Deploying Mock1271Signer...");
-    const factory = new ethers.ContractFactory(MOCK_1271_ABI, MOCK_1271_BYTECODE, wallet);
+    const factory = new ethers.ContractFactory(
+      MOCK_1271_ABI,
+      MOCK_1271_BYTECODE,
+      wallet,
+    );
     const deployed = await factory.deploy();
     await deployed.deployed();
     stubAddress = deployed.address;
@@ -115,10 +131,22 @@ export async function run() {
 
   // Ensure valid=false (mimics an unblessed shed)
   await (await signer.setValid(false)).wait();
-  await probe("A) valid=false, NO wrappers (baseline, expect REJECT)", stubAddress, false);
-  await probe("B) valid=false, WITH wrappers (THE QUESTION)", stubAddress, true);
+  await probe(
+    "A) valid=false, NO wrappers (baseline, expect REJECT)",
+    stubAddress,
+    false,
+  );
+  await probe(
+    "B) valid=false, WITH wrappers (THE QUESTION)",
+    stubAddress,
+    true,
+  );
 
   // Baseline: make the signature valid
   await (await signer.setValid(true)).wait();
-  await probe("C) valid=true, WITH wrappers (sanity, expect ACCEPT)", stubAddress, true);
+  await probe(
+    "C) valid=true, WITH wrappers (sanity, expect ACCEPT)",
+    stubAddress,
+    true,
+  );
 }
