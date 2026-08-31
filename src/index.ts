@@ -24,6 +24,9 @@ import { run as swapSellWithSlippageTolerance } from "./scripts/sepolia/swapSell
 import { run as approveTokenMainnet } from "./scripts/mainnet/approveTokenMainnet";
 import { run as getQuoteAndPostOrderMainnet } from "./scripts/mainnet/getQuoteAndPostOrder";
 import { run as approveTokenGnosis } from "./scripts/gnosis/approveTokenGnosis";
+import { run as postHookOrderGnosis } from "./scripts/gnosis/postHookOrder";
+import { run as probeWrappersAppData } from "./scripts/gnosis/probeWrappersAppData";
+import { run as probeOrder1271Wrapper } from "./scripts/gnosis/probeOrder1271Wrapper";
 import { run as swapAndBridgeSwapsIo } from "./scripts/bridging/swapAndBridgeSwapsIO";
 import { run as approveTokenArbitrum } from "./scripts/arbitrum/approveTokenArbitrum";
 import { run as swapAndBridgeAccrossArbitrum } from "./scripts/bridging/swapAndBridgeAccrossArbitrum";
@@ -88,7 +91,16 @@ const JOBS: (() => Promise<unknown>)[] = [
   // minimalAppData,
   // getIpfsForLegacyDoc,
   // postTwapForEOA,
-  postTwapForEOAWithJitFunds,
+  // postTwapForEOAWithJitFunds,
+
+  // Post a Gnosis order carrying CoW hooks in appData (enforceable-hooks assumption test)
+  // postHookOrderGnosis,
+
+  // Probe: does the Gnosis orderbook accept an appData doc with a `wrappers` field?
+  // probeWrappersAppData,
+
+  // Probe: does the orderbook accept a 1271 order whose sig is only valid at settlement + wrappers?
+  probeOrder1271Wrapper,
 ];
 
 async function main() {
