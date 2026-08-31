@@ -1,6 +1,7 @@
-import { BigNumber, ethers } from "ethers";
+import { ethers } from "ethers";
 
-const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+export const MULTICALL3 =
+  "0xcA11bde05977b3631167028862bE2a173976CA11";
 const MULTICALL3_INTERFACE = new ethers.utils.Interface([
   "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)",
 ]);
@@ -28,6 +29,7 @@ export type SignedPermit = {
   owner: string;
   spender: string;
   value: string;
+  nonce: string;
   deadline: string;
   v: number;
   r: string;
@@ -42,15 +44,10 @@ export function getPermitTokenContract(
 }
 
 export function optionalPermitCall(token: string, permit: SignedPermit) {
-  const callData = PERMIT_TOKEN_INTERFACE.encodeFunctionData("permit", [
-    permit.owner,
-    permit.spender,
-    permit.value,
-    permit.deadline,
-    permit.v,
-    permit.r,
-    permit.s,
-  ]);
+  const callData = PERMIT_TOKEN_INTERFACE.encodeFunctionData(
+    "permit",
+    permitArgs(permit),
+  );
   return {
     target: MULTICALL3,
     callData: MULTICALL3_INTERFACE.encodeFunctionData("aggregate3", [
@@ -59,11 +56,21 @@ export function optionalPermitCall(token: string, permit: SignedPermit) {
   };
 }
 
-export function permitValueForDebit(
-  currentAllowance: BigNumber,
-  debit: BigNumber,
-): BigNumber {
-  return currentAllowance.gte(debit)
-    ? currentAllowance
-    : currentAllowance.add(debit);
+export async function assertPermitValid(
+  token: ethers.Contract,
+  permit: SignedPermit,
+): Promise<void> {
+  await token.callStatic.permit(...permitArgs(permit));
+}
+
+function permitArgs(permit: SignedPermit) {
+  return [
+    permit.owner,
+    permit.spender,
+    permit.value,
+    permit.deadline,
+    permit.v,
+    permit.r,
+    permit.s,
+  ] as const;
 }

@@ -4,8 +4,11 @@ import { AbstractProviderAdapter } from "@cowprotocol/sdk-common";
 // Factory options for the COWShedForComposableCoW deployment on Gnosis Chain.
 // See https://gnosisscan.io/address/0x4f4350bf2c74aacd508d598a1ba94ef84378793d#readContract
 // and https://github.com/cowdao-grants/cow-shed/pull/53
+export const COW_SHED_FACTORY_ADDRESS =
+  "0x4f4350bf2c74aacd508d598a1ba94ef84378793d";
+
 const COW_SHED_FACTORY_OPTIONS = {
-  factoryAddress: "0x4f4350bf2c74aacd508d598a1ba94ef84378793d",
+  factoryAddress: COW_SHED_FACTORY_ADDRESS,
   implementationAddress: "0x6773d5aA31A1EAD34127D564D6E258E66254EbDb", // COWShedForComposableCoW implementation
   proxyCreationCode:
     // See https://gnosisscan.io/address/0x4f4350bf2c74aacd508d598a1ba94ef84378793d#readContract
