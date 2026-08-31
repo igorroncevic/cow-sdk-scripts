@@ -1,7 +1,7 @@
 import { BigNumber, BigNumberish, ethers } from "ethers";
 
 // Exact interface used by composable-cow/src/types/ComposableCowPoller.sol at
-// 194cf5059bd891abf8a53d9936675b84325e5f5b. Remove this adapter once the
+// d4e49601a1a8c130b2b28dd3a97fb187d3555ba6. Remove this adapter once the
 // matching @cowprotocol/sdk-composable release is available.
 const POLLER_ABI = [
   "function COMPOSABLE_COW() view returns (address)",

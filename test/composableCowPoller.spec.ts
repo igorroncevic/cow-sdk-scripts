@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { SupportedChainId } from "@cowprotocol/cow-sdk";
+import { COW_SHED_712_TYPES } from "@cowprotocol/sdk-cow-shed";
+import { EthersV5Adapter } from "@cowprotocol/sdk-ethers-v5-adapter";
 import { ethers } from "ethers";
 
 import {
@@ -11,6 +14,12 @@ import {
   optionalPermitCall,
   SignedPermit,
 } from "../src/scripts/composable-cow/optionalPermit";
+import {
+  COW_SHED_FACTORY_ADDRESS,
+  COW_SHED_IMPLEMENTATION_ADDRESS,
+  COW_SHED_VERSION,
+  getPollerCowShedSdk,
+} from "../src/scripts/composable-cow/pollerCowShed";
 
 const POLLER = "0x1111111111111111111111111111111111111111";
 const HANDLER = "0x2222222222222222222222222222222222222222";
@@ -32,6 +41,83 @@ const poller = new ComposableCowPoller(
 );
 
 async function main() {
+  const cowShedProvider = new ethers.providers.JsonRpcProvider();
+  cowShedProvider.getCode = async () => "0x";
+  const cowShedSigner = new ethers.Wallet(
+    "0x0000000000000000000000000000000000000000000000000000000000000001",
+    cowShedProvider,
+  );
+  const cowShedSdk = getPollerCowShedSdk(
+    new EthersV5Adapter({
+      provider: cowShedProvider,
+      signer: cowShedSigner,
+    }),
+  );
+  assert.equal(COW_SHED_VERSION, "2.1.0");
+  assert.equal(
+    COW_SHED_FACTORY_ADDRESS.toLowerCase(),
+    "0x5e284e80f3bd6a7d80a8500d9c49878028110848",
+  );
+  assert.equal(
+    COW_SHED_IMPLEMENTATION_ADDRESS.toLowerCase(),
+    "0xf0d400089d5b9faca64e3422ad6614546587cffb",
+  );
+  assert.equal(cowShedSdk.version, COW_SHED_VERSION);
+  assert.equal(
+    cowShedSdk
+      .getCowShedAccount(SupportedChainId.GNOSIS_CHAIN, FUNDER)
+      .toLowerCase(),
+    "0x919b82db489524b405e3e4193250970056387c35",
+  );
+  const cowShedNonce = ethers.utils.hexZeroPad("0x02", 32);
+  const cowShedDeadline = 1_800_000_000n;
+  const cowShedCalls = [
+    {
+      target: TOKEN,
+      value: 0n,
+      callData: "0x",
+      allowFailure: false,
+      isDelegateCall: false,
+    },
+  ];
+  const signedCowShedCall = await cowShedSdk.signCalls({
+    chainId: SupportedChainId.GNOSIS_CHAIN,
+    calls: cowShedCalls,
+    nonce: cowShedNonce,
+    deadline: cowShedDeadline,
+    signer: cowShedSigner,
+    gasLimit: 1n,
+  });
+  assert.equal(
+    signedCowShedCall.signedMulticall.to.toLowerCase(),
+    COW_SHED_FACTORY_ADDRESS.toLowerCase(),
+  );
+  const cowShedFactoryInterface = new ethers.utils.Interface([
+    "function executeHooks((address target,uint256 value,bytes callData,bool allowFailure,bool isDelegateCall)[] calls,bytes32 nonce,uint256 deadline,address user,bytes signature)",
+  ]);
+  const decodedCowShedCall = cowShedFactoryInterface.decodeFunctionData(
+    "executeHooks",
+    signedCowShedCall.signedMulticall.data,
+  );
+  assert.equal(
+    ethers.utils.verifyTypedData(
+      {
+        name: "COWShed",
+        version: COW_SHED_VERSION,
+        chainId: SupportedChainId.GNOSIS_CHAIN,
+        verifyingContract: signedCowShedCall.cowShedAccount,
+      },
+      COW_SHED_712_TYPES,
+      {
+        calls: cowShedCalls,
+        nonce: cowShedNonce,
+        deadline: cowShedDeadline,
+      },
+      decodedCowShedCall.signature,
+    ),
+    cowShedSigner.address,
+  );
+
   const expectedScheduleId = ethers.utils.keccak256(
     ethers.utils.defaultAbiCoder.encode(
       ["address", "address", "address", "bytes32"],

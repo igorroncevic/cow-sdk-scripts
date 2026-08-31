@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { MetadataApi } from "@cowprotocol/app-data";
+import { MetadataApi } from "@cowprotocol/sdk-app-data";
 import {
   COMPOSABLE_COW_CONTRACT_ADDRESS,
   OrderBookApi,
@@ -16,7 +16,10 @@ import { BigNumber, ethers } from "ethers";
 import { APP_CODE, COW_VAULT_RELAYER_CONTRACT } from "../../const";
 import { confirm, getRpcProvider, getWallet } from "../../utils";
 import { ComposableCowPoller } from "./composableCowPoller";
-import { COW_SHED_FACTORY_ADDRESS, getCowShedSdk } from "./cowShed";
+import {
+  COW_SHED_FACTORY_ADDRESS,
+  getPollerCowShedSdk,
+} from "./pollerCowShed";
 import {
   assertPermitValid,
   getPermitTokenContract,
@@ -50,7 +53,7 @@ export async function run(): Promise<void> {
     SDAI,
     new ethers.VoidSigner(funder, provider),
   );
-  const cowShedSdk = getCowShedSdk(adapter);
+  const cowShedSdk = getPollerCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
   const [decimals, composableCow, pollerCowShedFactory] = await Promise.all([
     token.decimals(),

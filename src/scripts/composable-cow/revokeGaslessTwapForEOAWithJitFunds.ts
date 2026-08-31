@@ -17,7 +17,10 @@ import {
   ComposableCowPoller,
   PollerSchedule,
 } from "./composableCowPoller";
-import { COW_SHED_FACTORY_ADDRESS, getCowShedSdk } from "./cowShed";
+import {
+  COW_SHED_FACTORY_ADDRESS,
+  getPollerCowShedSdk,
+} from "./pollerCowShed";
 import {
   assertPermitValid,
   getPermitTokenContract,
@@ -48,7 +51,7 @@ export async function run(): Promise<void> {
   const adapter = new EthersV5Adapter({ provider, signer: wallet });
   setGlobalAdapter(adapter);
   const poller = new ComposableCowPoller(pollerAddress, provider);
-  const cowShedSdk = getCowShedSdk(adapter);
+  const cowShedSdk = getPollerCowShedSdk(adapter);
   const cowShed = cowShedSdk.getCowShedAccount(CHAIN_ID, funder);
   const token = getPermitTokenContract(
     SDAI,
